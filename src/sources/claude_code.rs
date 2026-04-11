@@ -1,16 +1,18 @@
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use serde::Deserialize;
-use serde_json::Value;
 
-use crate::session::{SessionEntry, Tool};
+use crate::model::session::{SessionEntry, Tool};
 
-use super::{DeleteSummary, SessionSource, delete_entries_within_root};
+use super::{
+    DeleteSummary, SessionSource, delete_entries_within_root, project_from_cwd,
+    sort_sessions_by_project,
+};
 
 const ROOT_ENV: &str = "NUKE_MY_SESSIONS_CLAUDE_ROOT";
 
@@ -37,7 +39,6 @@ impl ClaudeCodeSource {
             fs::File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
         let reader = BufReader::new(file);
         let mut cwd = None;
-        let mut first_prompt = None;
 
         for line in reader.lines() {
             let line = line?;
@@ -46,18 +47,8 @@ impl ClaudeCodeSource {
                 Err(_) => continue,
             };
 
-            if cwd.is_none() {
+            if record.cwd.is_some() {
                 cwd = record.cwd;
-            }
-
-            if first_prompt.is_none() && record.record_type == "user" {
-                first_prompt = record
-                    .message
-                    .as_ref()
-                    .and_then(|message| extract_message_text(&message.content));
-            }
-
-            if cwd.is_some() && first_prompt.is_some() {
                 break;
             }
         }
@@ -71,10 +62,12 @@ impl ClaudeCodeSource {
             .unwrap_or("unknown")
             .to_owned();
 
+        let project = project_from_cwd(cwd.as_deref());
+
         Ok(SessionEntry {
             tool: Tool::ClaudeCode,
-            id: id.clone(),
-            label: build_label(cwd.as_deref(), first_prompt.as_deref(), &id),
+            id,
+            project,
             path,
             updated_at,
         })
@@ -112,7 +105,7 @@ impl SessionSource for ClaudeCodeSource {
             }
         }
 
-        sort_sessions(&mut sessions);
+        sort_sessions_by_project(&mut sessions);
         Ok(sessions)
     }
 
@@ -123,17 +116,8 @@ impl SessionSource for ClaudeCodeSource {
 
 #[derive(Deserialize)]
 struct ClaudeRecord {
-    #[serde(rename = "type")]
-    record_type: String,
-    #[serde(default)]
-    message: Option<ClaudeMessage>,
     #[serde(default)]
     cwd: Option<PathBuf>,
-}
-
-#[derive(Deserialize)]
-struct ClaudeMessage {
-    content: Value,
 }
 
 fn default_root() -> Result<PathBuf> {
@@ -143,56 +127,6 @@ fn default_root() -> Result<PathBuf> {
         .to_path_buf();
 
     Ok(home.join(".claude").join("projects"))
-}
-
-fn extract_message_text(content: &Value) -> Option<String> {
-    let text = match content {
-        Value::String(text) => text.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
-    };
-
-    let text = text.trim().replace('\n', " ");
-    if text.is_empty() {
-        return None;
-    }
-
-    Some(truncate(&text, 72))
-}
-
-fn build_label(cwd: Option<&Path>, prompt: Option<&str>, id: &str) -> String {
-    let project = cwd
-        .and_then(|cwd| cwd.file_name())
-        .and_then(|name| name.to_str());
-
-    match (project, prompt) {
-        (Some(project), Some(prompt)) => format!("{project}: {prompt}"),
-        (Some(project), None) => project.to_owned(),
-        (None, Some(prompt)) => prompt.to_owned(),
-        (None, None) => id.to_owned(),
-    }
-}
-
-fn truncate(value: &str, max_len: usize) -> String {
-    if value.chars().count() <= max_len {
-        return value.to_owned();
-    }
-
-    let truncated = value.chars().take(max_len - 3).collect::<String>();
-    format!("{truncated}...")
-}
-
-fn sort_sessions(sessions: &mut [SessionEntry]) {
-    sessions.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| left.label.cmp(&right.label))
-    });
 }
 
 #[cfg(test)]
@@ -221,6 +155,7 @@ mod tests {
         let sessions = ClaudeCodeSource::at(root).list_sessions().unwrap();
 
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].label, "sandbox: install rust");
+        assert_eq!(sessions[0].project.as_deref(), Some("sandbox"));
+        assert_eq!(sessions[0].id, "session-1");
     }
 }

@@ -1,23 +1,24 @@
-mod cli;
 mod delete_flow;
-mod output;
-mod session;
+mod model;
 mod sources;
+mod ui;
 
 use std::io::{IsTerminal, stdin, stdout};
 
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
+use dialoguer::console::Term;
 
-use crate::cli::{Cli, Command};
 use crate::delete_flow::{DialoguerPrompter, run_select_flow};
-use crate::output::{print_delete_outcome, print_sessions, print_tool_header};
-use crate::session::Tool;
+use crate::model::session::Tool;
 use crate::sources::SourceRegistry;
+use crate::ui::cli::{Cli, Command};
+use crate::ui::output::{print_delete_outcome, print_sessions, print_tool_header};
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
+    clear_terminal_on_launch()?;
 
     let registry = SourceRegistry::new()?;
     match cli.command.unwrap_or(Command::Select) {
@@ -117,4 +118,12 @@ fn ensure_terminal() -> Result<()> {
     }
 
     bail!("interactive mode requires a terminal")
+}
+
+fn clear_terminal_on_launch() -> Result<()> {
+    if !stdout().is_terminal() {
+        return Ok(());
+    }
+
+    Term::stdout().clear_screen().map_err(Into::into)
 }

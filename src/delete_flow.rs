@@ -1,7 +1,9 @@
-use anyhow::Result;
-use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
+mod selector;
 
-use crate::session::{SessionEntry, Tool};
+use anyhow::Result;
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
+
+use crate::model::session::{SessionEntry, Tool};
 use crate::sources::SessionSource;
 
 pub trait Prompter {
@@ -34,16 +36,7 @@ impl DialoguerPrompter {
 
 impl Prompter for DialoguerPrompter {
     fn select_sessions(&mut self, sessions: &[SessionEntry]) -> Result<Vec<usize>> {
-        let items = sessions
-            .iter()
-            .map(SessionEntry::display_line)
-            .collect::<Vec<_>>();
-        let selected = MultiSelect::with_theme(&self.theme)
-            .with_prompt("sessions")
-            .items(&items)
-            .interact()?;
-
-        Ok(selected)
+        selector::select_grouped_sessions(sessions, &self.theme)
     }
 
     fn confirm_delete(&mut self, tool: Tool, selected_count: usize) -> Result<bool> {
@@ -90,7 +83,7 @@ mod tests {
     use anyhow::Result;
 
     use super::{Prompter, run_select_flow};
-    use crate::session::{SessionEntry, Tool};
+    use crate::model::session::{SessionEntry, Tool};
     use crate::sources::{DeleteSummary, SessionSource};
 
     struct FakeSource {
@@ -134,11 +127,7 @@ mod tests {
     #[test]
     fn deletes_selected_sessions_from_flow() {
         let source = FakeSource {
-            sessions: vec![
-                session("a", "alpha"),
-                session("b", "beta"),
-                session("c", "gamma"),
-            ],
+            sessions: vec![session("a"), session("b"), session("c")],
             deleted: RefCell::new(Vec::new()),
         };
         let mut prompter = StubPrompter {
@@ -152,11 +141,11 @@ mod tests {
         assert_eq!(source.deleted.borrow().as_slice(), &["a", "c"]);
     }
 
-    fn session(id: &str, label: &str) -> SessionEntry {
+    fn session(id: &str) -> SessionEntry {
         SessionEntry {
             tool: Tool::Codex,
             id: id.into(),
-            label: label.into(),
+            project: None,
             path: PathBuf::from(format!("{id}.jsonl")),
             updated_at: None,
         }

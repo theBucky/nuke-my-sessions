@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::session::{SessionEntry, Tool};
+use crate::model::session::{SessionEntry, Tool};
 
 pub use claude_code::ClaudeCodeSource;
 pub use codex::CodexSource;
@@ -128,6 +128,23 @@ pub fn collect_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+pub(crate) fn project_from_cwd(cwd: Option<&Path>) -> Option<String> {
+    cwd.and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn sort_sessions_by_project(sessions: &mut [SessionEntry]) {
+    sessions.sort_by(|left, right| {
+        left.project
+            .is_none()
+            .cmp(&right.project.is_none())
+            .then_with(|| left.project.cmp(&right.project))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
 fn collect_jsonl_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if !root.exists() {
         return Ok(());
@@ -157,7 +174,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::delete_entries_within_root;
-    use crate::session::{SessionEntry, Tool};
+    use crate::model::session::{SessionEntry, Tool};
 
     #[test]
     fn refuses_to_delete_files_outside_root() {
@@ -172,7 +189,7 @@ mod tests {
             &[SessionEntry {
                 tool: Tool::ClaudeCode,
                 id: "outside".into(),
-                label: "outside".into(),
+                project: None,
                 path: outside.clone(),
                 updated_at: None,
             }],

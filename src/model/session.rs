@@ -31,13 +31,17 @@ impl Display for Tool {
 pub struct SessionEntry {
     pub tool: Tool,
     pub id: String,
-    pub label: String,
+    pub project: Option<String>,
     pub path: PathBuf,
     pub updated_at: Option<SystemTime>,
 }
 
 impl SessionEntry {
-    pub fn display_line(&self) -> String {
-        format!("{} ({})", self.label, self.id)
+    pub fn project_name(&self) -> &str {
+        self.project.as_deref().unwrap_or("no project")
+    }
+
+    pub fn display_line(&self) -> &str {
+        &self.id
     }
 }

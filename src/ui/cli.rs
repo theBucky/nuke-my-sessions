@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::session::Tool;
+use crate::model::session::Tool;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]

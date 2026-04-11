@@ -10,7 +10,7 @@ fn list_prints_sessions_from_both_tools() {
     let temp = tempdir().unwrap();
     let roots = TestRoots::new(temp.path());
     roots.write_claude_session("session-a", "install rust", "sandbox");
-    roots.write_codex_session("session-b", "review auth flow", "project");
+    roots.write_codex_session("session-b", "project");
 
     Command::cargo_bin("nuke-my-sessions")
         .unwrap()
@@ -20,17 +20,19 @@ fn list_prints_sessions_from_both_tools() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Claude Code:"))
-        .stdout(predicate::str::contains("sandbox: install rust"))
+        .stdout(predicate::str::contains("[sandbox]"))
+        .stdout(predicate::str::contains("session-a"))
         .stdout(predicate::str::contains("Codex:"))
-        .stdout(predicate::str::contains("review auth flow [project]"));
+        .stdout(predicate::str::contains("[project]"))
+        .stdout(predicate::str::contains("session-b"));
 }
 
 #[test]
 fn nuke_all_yes_deletes_codex_sessions() {
     let temp = tempdir().unwrap();
     let roots = TestRoots::new(temp.path());
-    let first = roots.write_codex_session("session-a", "review auth flow", "project");
-    let second = roots.write_codex_session("session-b", "cleanup tests", "project");
+    let first = roots.write_codex_session("session-a", "project");
+    let second = roots.write_codex_session("session-b", "project");
 
     Command::cargo_bin("nuke-my-sessions")
         .unwrap()
@@ -48,7 +50,6 @@ fn nuke_all_yes_deletes_codex_sessions() {
 struct TestRoots {
     claude_root: PathBuf,
     codex_root: PathBuf,
-    codex_home: PathBuf,
 }
 
 impl TestRoots {
@@ -56,7 +57,6 @@ impl TestRoots {
         Self {
             claude_root: root.join(".claude").join("projects"),
             codex_root: root.join(".codex").join("sessions"),
-            codex_home: root.join(".codex"),
         }
     }
 
@@ -77,14 +77,9 @@ impl TestRoots {
         path
     }
 
-    fn write_codex_session(&self, id: &str, thread_name: &str, project: &str) -> PathBuf {
+    fn write_codex_session(&self, id: &str, project: &str) -> PathBuf {
         let session_root = self.codex_root.join("2026").join("04").join("11");
         fs::create_dir_all(&session_root).unwrap();
-        fs::create_dir_all(&self.codex_home).unwrap();
-        append_line(
-            &self.codex_home.join("session_index.jsonl"),
-            &format!("{{\"id\":\"{id}\",\"thread_name\":\"{thread_name}\"}}"),
-        );
 
         let path = session_root.join(format!("rollout-{id}.jsonl"));
         fs::write(
@@ -97,15 +92,4 @@ impl TestRoots {
 
         path
     }
-}
-
-fn append_line(path: &Path, line: &str) {
-    let existing = fs::read_to_string(path).unwrap_or_default();
-    let next = if existing.is_empty() {
-        format!("{line}\n")
-    } else {
-        format!("{existing}{line}\n")
-    };
-
-    fs::write(path, next).unwrap();
 }

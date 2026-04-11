@@ -1,4 +1,4 @@
-use crate::session::{SessionEntry, Tool};
+use crate::model::session::{SessionEntry, Tool};
 
 pub fn print_tool_header(tool: Tool) {
     println!("{tool}:");
@@ -10,8 +10,15 @@ pub fn print_sessions(sessions: &[SessionEntry]) {
         return;
     }
 
+    let mut current_project: Option<&str> = None;
     for session in sessions {
-        println!("  {}", session.display_line());
+        let project = session.project_name();
+        if current_project != Some(project) {
+            println!("  [{project}]");
+            current_project = Some(project);
+        }
+
+        println!("    {}", session.display_line());
     }
 }
 
