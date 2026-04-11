@@ -47,6 +47,21 @@ fn nuke_all_yes_deletes_codex_sessions() {
     assert!(!second.exists());
 }
 
+#[test]
+fn nuke_all_yes_reports_when_no_sessions_exist() {
+    let temp = tempdir().unwrap();
+    let roots = TestRoots::new(temp.path());
+
+    Command::cargo_bin("nuke-my-sessions")
+        .unwrap()
+        .args(["nuke", "--tool", "codex", "--all", "--yes"])
+        .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &roots.claude_root)
+        .env("NUKE_MY_SESSIONS_CODEX_ROOT", &roots.codex_root)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex: no sessions found"));
+}
+
 struct TestRoots {
     claude_root: PathBuf,
     codex_root: PathBuf,

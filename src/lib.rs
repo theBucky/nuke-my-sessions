@@ -15,6 +15,12 @@ use crate::sources::SourceRegistry;
 use crate::ui::cli::{Cli, Command};
 use crate::ui::output::{print_delete_outcome, print_sessions, print_tool_header};
 
+pub(crate) enum DeleteOutcome {
+    NoSessionsFound,
+    NoSessionsDeleted,
+    Deleted(usize),
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
@@ -79,7 +85,7 @@ fn nuke_sessions(
 
     let sessions = registry.source(tool).list_sessions()?;
     if sessions.is_empty() {
-        print_delete_outcome(tool, 0);
+        print_delete_outcome(tool, DeleteOutcome::NoSessionsFound);
         return Ok(());
     }
 
@@ -87,13 +93,13 @@ fn nuke_sessions(
         ensure_terminal()?;
         let mut prompter = DialoguerPrompter::default();
         if !prompter.confirm_nuke_all(tool, sessions.len())? {
-            print_delete_outcome(tool, 0);
+            print_delete_outcome(tool, DeleteOutcome::NoSessionsDeleted);
             return Ok(());
         }
     }
 
     let deleted = registry.source(tool).delete_sessions(&sessions)?.finish()?;
-    print_delete_outcome(tool, deleted);
+    print_delete_outcome(tool, DeleteOutcome::Deleted(deleted));
 
     Ok(())
 }
