@@ -172,7 +172,11 @@ fn render_rows(
     ))?;
     term.write_line(&format!(
         "{}",
-        style("new/prev: \u{2190}/\u{2192}, select/all: <space>/<a>").dim()
+        style("move: \u{2191}/\u{2193}, page: \u{2190}/\u{2192}").dim()
+    ))?;
+    term.write_line(&format!(
+        "{}",
+        style("select: space, all: a, confirm: enter").dim()
     ))?;
 
     term.flush()?;
@@ -213,19 +217,19 @@ mod tests {
     #[test]
     fn computes_pager_with_footer_budget() {
         let pager = compute_pager(50, 10);
-        assert_eq!(pager.capacity, 7);
-        assert_eq!(pager.page_count, 8);
+        assert_eq!(pager.capacity, 6);
+        assert_eq!(pager.page_count, 9);
 
         let viewport = viewport_for_page(50, pager, 2);
-        assert_eq!(viewport.start, 14);
-        assert_eq!(viewport.end, 21);
+        assert_eq!(viewport.start, 12);
+        assert_eq!(viewport.end, 18);
         assert_eq!(rendered_line_count(viewport), 9);
     }
 
     #[test]
     fn clamps_single_page_viewport() {
         let pager = compute_pager(4, 10);
-        assert_eq!(pager.capacity, 7);
+        assert_eq!(pager.capacity, 6);
         assert_eq!(pager.page_count, 1);
 
         let viewport = viewport_for_page(4, pager, 99);

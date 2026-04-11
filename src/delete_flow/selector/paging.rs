@@ -1,4 +1,4 @@
-const FOOTER_LINES: usize = 2;
+const FOOTER_LINES: usize = 3;
 const SAFETY_LINES: usize = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
