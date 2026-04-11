@@ -146,7 +146,9 @@ fn render_rows(
         .skip(viewport.start)
     {
         match row {
-            DisplayRow::Header(text) => term.write_line(&format!("  {}", style(text).dim()))?,
+            DisplayRow::Header(text) => {
+                term.write_line(&format!("  {}", style(text).dim().for_stderr()))?
+            }
             DisplayRow::Session {
                 session_index,
                 text,
@@ -161,6 +163,7 @@ fn render_rows(
         }
     }
 
+    term.write_line("")?;
     term.write_line(&format!(
         "{}",
         style(format!(
@@ -169,18 +172,31 @@ fn render_rows(
             viewport.pager.page_count
         ))
         .dim()
+        .for_stderr()
     ))?;
     term.write_line(&format!(
-        "{}",
-        style("move: \u{2191}/\u{2193}, page: \u{2190}/\u{2192}").dim()
+        "{}{}{}{}",
+        style("move: ").dim().for_stderr(),
+        hotkey("\u{2191}/\u{2193}"),
+        style(", page: ").dim().for_stderr(),
+        hotkey("\u{2190}/\u{2192}")
     ))?;
     term.write_line(&format!(
-        "{}",
-        style("select: space, all: a, confirm: enter").dim()
+        "{}{}{}{}{}{}",
+        style("select: ").dim().for_stderr(),
+        hotkey("space"),
+        style(", all: ").dim().for_stderr(),
+        hotkey("a"),
+        style(", confirm: ").dim().for_stderr(),
+        hotkey("enter")
     ))?;
 
     term.flush()?;
     Ok(rendered_line_count(viewport))
+}
+
+fn hotkey(text: &str) -> String {
+    style(text).cyan().bold().for_stderr().to_string()
 }
 
 fn format_with_theme(render: impl FnOnce(&mut String) -> std::fmt::Result) -> String {
@@ -217,19 +233,19 @@ mod tests {
     #[test]
     fn computes_pager_with_footer_budget() {
         let pager = compute_pager(50, 10);
-        assert_eq!(pager.capacity, 6);
-        assert_eq!(pager.page_count, 9);
+        assert_eq!(pager.capacity, 5);
+        assert_eq!(pager.page_count, 10);
 
         let viewport = viewport_for_page(50, pager, 2);
-        assert_eq!(viewport.start, 12);
-        assert_eq!(viewport.end, 18);
+        assert_eq!(viewport.start, 10);
+        assert_eq!(viewport.end, 15);
         assert_eq!(rendered_line_count(viewport), 9);
     }
 
     #[test]
     fn clamps_single_page_viewport() {
         let pager = compute_pager(4, 10);
-        assert_eq!(pager.capacity, 6);
+        assert_eq!(pager.capacity, 5);
         assert_eq!(pager.page_count, 1);
 
         let viewport = viewport_for_page(4, pager, 99);
