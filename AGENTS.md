@@ -1,6 +1,6 @@
 # Repo context
 
-Rust CLI to nuke all or selected sessions in Claude Code and Codex.
+Rust CLI to nuke all or selected sessions in Claude Code, Codex, and Droid.
 
 ## Where to look
 
@@ -28,3 +28,4 @@ Session data paths (overridable via env):
 |-------------|------------------------|---------------------------------|
 | Claude Code | `~/.claude/projects`   | `NUKE_MY_SESSIONS_CLAUDE_ROOT`  |
 | Codex       | `~/.codex/sessions`    | `NUKE_MY_SESSIONS_CODEX_ROOT`   |
+| Droid       | `~/.factory/sessions`  | `NUKE_MY_SESSIONS_DROID_ROOT`   |
