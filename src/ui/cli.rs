@@ -16,9 +16,6 @@ pub struct Cli {
 
     #[arg(long, short = 'y', global = true)]
     pub yes: bool,
-
-    #[arg(long, global = true)]
-    pub verbose: bool,
 }
 
 #[derive(Clone, Copy, Debug, Subcommand)]

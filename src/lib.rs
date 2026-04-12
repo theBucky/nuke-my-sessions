@@ -5,7 +5,7 @@ mod ui;
 
 use std::io::{IsTerminal, stdin, stdout};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use clap::Parser;
 use dialoguer::console::Term;
 
@@ -23,7 +23,6 @@ pub(crate) enum DeleteOutcome {
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.verbose)?;
     clear_terminal_on_launch()?;
 
     let registry = SourceRegistry::new()?;
@@ -103,21 +102,6 @@ fn nuke_sessions(
 
     Ok(())
 }
-
-fn init_tracing(verbose: bool) -> Result<()> {
-    if !verbose {
-        return Ok(());
-    }
-
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .without_time()
-        .try_init()
-        .map_err(|error| anyhow!(error.to_string()))?;
-
-    Ok(())
-}
-
 fn ensure_terminal() -> Result<()> {
     if stdin().is_terminal() && stdout().is_terminal() {
         return Ok(());
