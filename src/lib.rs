@@ -35,7 +35,7 @@ pub fn run() -> Result<()> {
 }
 
 fn list_sessions(registry: &SourceRegistry, tool: Option<Tool>) -> Result<()> {
-    let tools = tool.map_or_else(|| vec![Tool::ClaudeCode, Tool::Codex], |tool| vec![tool]);
+    let tools = tool.map_or_else(|| Tool::all().to_vec(), |tool| vec![tool]);
 
     for (index, tool) in tools.iter().enumerate() {
         if index > 0 {

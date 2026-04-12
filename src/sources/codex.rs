@@ -144,7 +144,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("rollout-abc.jsonl"),
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"cwd\":\"/Users/m5pbook/repo/project\"}}\n",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"cwd\":\"~/repo/project\"}}\n",
         )
         .unwrap();
         let sessions = CodexSource::at(temp.path().join(".codex").join("sessions"))

@@ -10,13 +10,20 @@ pub enum Tool {
     ClaudeCode,
     #[value(name = "codex")]
     Codex,
+    #[value(name = "droid")]
+    Droid,
 }
 
 impl Tool {
+    pub const fn all() -> [Self; 3] {
+        [Self::ClaudeCode, Self::Codex, Self::Droid]
+    }
+
     pub fn noun(self) -> &'static str {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
+            Self::Droid => "Droid",
         }
     }
 }

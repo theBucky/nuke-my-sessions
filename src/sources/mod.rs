@@ -1,5 +1,6 @@
 mod claude_code;
 mod codex;
+mod droid;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use crate::model::session::{SessionEntry, Tool};
 
 pub use claude_code::ClaudeCodeSource;
 pub use codex::CodexSource;
+pub use droid::DroidSource;
 
 pub trait SessionSource {
     fn tool(&self) -> Tool;
@@ -20,6 +22,7 @@ pub trait SessionSource {
 pub struct SourceRegistry {
     claude_code: ClaudeCodeSource,
     codex: CodexSource,
+    droid: DroidSource,
 }
 
 impl SourceRegistry {
@@ -27,6 +30,7 @@ impl SourceRegistry {
         Ok(Self {
             claude_code: ClaudeCodeSource::new()?,
             codex: CodexSource::new()?,
+            droid: DroidSource::new()?,
         })
     }
 
@@ -34,6 +38,7 @@ impl SourceRegistry {
         match tool {
             Tool::ClaudeCode => &self.claude_code,
             Tool::Codex => &self.codex,
+            Tool::Droid => &self.droid,
         }
     }
 }
@@ -78,6 +83,16 @@ pub struct DeleteFailure {
 }
 
 pub fn delete_entries_within_root(root: &Path, sessions: &[SessionEntry]) -> Result<DeleteSummary> {
+    delete_entries_within_root_using(root, sessions, |root, session| {
+        delete_entry(root, &session.path)
+    })
+}
+
+pub(crate) fn delete_entries_within_root_using(
+    root: &Path,
+    sessions: &[SessionEntry],
+    mut delete_session: impl FnMut(&Path, &SessionEntry) -> Result<()>,
+) -> Result<DeleteSummary> {
     if sessions.is_empty() {
         return Ok(DeleteSummary::success(0));
     }
@@ -88,7 +103,7 @@ pub fn delete_entries_within_root(root: &Path, sessions: &[SessionEntry]) -> Res
     let mut failed = Vec::new();
 
     for session in sessions {
-        match delete_entry(&root, &session.path) {
+        match delete_session(&root, session) {
             Ok(()) => deleted += 1,
             Err(error) => failed.push(DeleteFailure {
                 path: session.path.clone(),
@@ -100,7 +115,7 @@ pub fn delete_entries_within_root(root: &Path, sessions: &[SessionEntry]) -> Res
     Ok(DeleteSummary { deleted, failed })
 }
 
-fn delete_entry(root: &Path, path: &Path) -> Result<()> {
+pub(crate) fn delete_entry(root: &Path, path: &Path) -> Result<()> {
     let path =
         fs::canonicalize(path).with_context(|| format!("failed to resolve {}", path.display()))?;
     if !path.starts_with(root) {

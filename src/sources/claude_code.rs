@@ -142,13 +142,13 @@ mod tests {
     fn lists_claude_sessions_from_project_directories() {
         let temp = tempdir().unwrap();
         let root = temp.path().join(".claude").join("projects");
-        let project = root.join("-Users-m5pbook-repo-sandbox");
+        let project = root.join("repo-sandbox");
         fs::create_dir_all(&project).unwrap();
         fs::write(
             project.join("session-1.jsonl"),
             concat!(
-                "{\"type\":\"user\",\"message\":{\"content\":\"install rust\"},\"cwd\":\"/Users/m5pbook/repo/sandbox\"}\n",
-                "{\"type\":\"assistant\",\"message\":{\"content\":\"ok\"},\"cwd\":\"/Users/m5pbook/repo/sandbox\"}\n"
+                "{\"type\":\"user\",\"message\":{\"content\":\"install rust\"},\"cwd\":\"~/repo/sandbox\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"content\":\"ok\"},\"cwd\":\"~/repo/sandbox\"}\n"
             ),
         )
         .unwrap();

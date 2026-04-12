@@ -19,10 +19,11 @@ pub struct DialoguerPrompter {
 
 impl DialoguerPrompter {
     pub fn choose_tool(&self) -> Tool {
-        let tools = [Tool::ClaudeCode, Tool::Codex];
+        let tools = Tool::all();
+        let labels = tools.map(Tool::noun);
         let selection = Select::with_theme(&self.theme)
             .with_prompt("tool")
-            .items(["Claude Code", "Codex"])
+            .items(labels)
             .default(0)
             .interact()
             .unwrap_or(0);
