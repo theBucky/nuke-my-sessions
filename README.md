@@ -1,30 +1,51 @@
 # nuke-my-sessions
 
-Claude Code and Codex store session history locally but provide no native way to remove them. Codex offers archive, not deletion. This CLI fills the gap.
+CLI to list and delete local session history for Claude Code, Codex, and Droid.
 
-## Installation
+## Run
 
 ```sh
-cargo install --path .
+cargo run --
+cargo run -- list
+cargo run -- nuke --tool codex --all --yes
+```
+
+## Build
+
+```sh
+cargo build
+cargo build --release
 ```
 
 ## Usage
 
 ```sh
-nuke-my-sessions              # interactive session selection (default)
-nuke-my-sessions list         # list all sessions
-nuke-my-sessions nuke --all   # delete all sessions for a tool (prompts for confirmation)
-nuke-my-sessions nuke --all -y --tool codex   # skip confirmation, target specific tool
+nuke-my-sessions
+nuke-my-sessions select
+nuke-my-sessions list
+nuke-my-sessions list --tool codex
+nuke-my-sessions nuke --tool droid --all
+nuke-my-sessions nuke --tool codex --all --yes
 ```
 
-## Session locations
+`select` is default. It opens an interactive picker for one tool.
 
-| Tool        | Path                 |
-|-------------|----------------------|
-| Claude Code | `~/.claude/projects` |
-| Codex       | `~/.codex/sessions`  |
+`nuke` only works with `--all`. If stdin/stdout is not a terminal, `nuke --all` also requires `--tool`.
 
-Override with `NUKE_MY_SESSIONS_CLAUDE_ROOT` or `NUKE_MY_SESSIONS_CODEX_ROOT`.
+## Tools
+
+| Tool | `--tool` value | Default root | Env override |
+|------|----------------|--------------|--------------|
+| Claude Code | `claude-code` | `~/.claude/projects` | `NUKE_MY_SESSIONS_CLAUDE_ROOT` |
+| Codex | `codex` | `~/.codex/sessions` | `NUKE_MY_SESSIONS_CODEX_ROOT` |
+| Droid | `droid` | `~/.factory/sessions` | `NUKE_MY_SESSIONS_DROID_ROOT` |
+
+## Behavior
+
+* `list` prints sessions grouped by project.
+* `select` lets you choose sessions to delete interactively.
+* `nuke --all` deletes every session for one tool, with confirmation unless `--yes` is set.
+* Droid deletion removes both the `.jsonl` session file and matching `.settings.json` file.
 
 ## License
 
