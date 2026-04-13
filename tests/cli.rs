@@ -30,6 +30,26 @@ fn list_prints_sessions_from_all_tools() {
 }
 
 #[test]
+fn nuke_all_yes_deletes_claude_session_containers() {
+    let temp = tempdir().unwrap();
+    let roots = TestRoots::new(temp.path());
+    let session_dir = roots.write_claude_container_session("session-a", "sandbox");
+    let project_dir = session_dir.parent().unwrap().to_path_buf();
+
+    roots
+        .command()
+        .args(["nuke", "--tool", "claude-code", "--all", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Claude Code: deleted 1 session(s)",
+        ));
+
+    assert!(!session_dir.exists());
+    assert!(!project_dir.exists());
+}
+
+#[test]
 fn nuke_all_yes_deletes_codex_sessions() {
     let temp = tempdir().unwrap();
     let roots = TestRoots::new(temp.path());
@@ -147,6 +167,37 @@ impl TestRoots {
         .unwrap();
 
         path
+    }
+
+    fn write_claude_container_session(&self, id: &str, project: &str) -> PathBuf {
+        let project_root = self.claude.join(format!("repo-{project}"));
+        let session_root = project_root.join(id);
+        let subagents = session_root.join("subagents");
+        let tool_results = session_root.join("tool-results");
+        fs::create_dir_all(&subagents).unwrap();
+        fs::create_dir_all(&tool_results).unwrap();
+        fs::write(
+            subagents.join("agent-a.jsonl"),
+            format!(
+                concat!(
+                    "{{\"type\":\"user\",\"sessionId\":\"{}\",\"cwd\":\"{}\"}}\n",
+                    "{{\"type\":\"assistant\",\"sessionId\":\"{}\",\"cwd\":\"{}\"}}\n"
+                ),
+                id,
+                test_cwd(project),
+                id,
+                test_cwd(project)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            subagents.join("agent-a.meta.json"),
+            "{\"agentId\":\"agent-a\"}\n",
+        )
+        .unwrap();
+        fs::write(tool_results.join("tool-1.txt"), "ok\n").unwrap();
+
+        session_root
     }
 
     fn write_codex_session(&self, id: &str, project: &str) -> PathBuf {
