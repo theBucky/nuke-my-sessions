@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
 };
 
 use super::{ScopedSelection, delete_selected_sessions};
@@ -25,6 +25,7 @@ use crate::sources::SourceRegistry;
 
 const TOOLS_PANEL_WIDTH: u16 = 24;
 const FOOTER_HEIGHT: u16 = 4;
+const PANEL_PADDING_X: u16 = 1;
 const NO_SESSIONS_STATUS: &str = "no sessions found";
 const EMPTY_SELECTION_STATUS: &str = "select at least one session";
 
@@ -123,7 +124,8 @@ impl<'a> SelectApp<'a> {
             .areas(body);
 
         self.session_page_size =
-            i16::try_from(sessions.height.saturating_sub(2).max(1)).unwrap_or(i16::MAX);
+            i16::try_from(titled_block("sessions").inner(sessions).height.max(1))
+                .unwrap_or(i16::MAX);
         self.render_tools(frame, tools);
         self.render_sessions(frame, sessions);
         self.render_footer(frame, footer);
@@ -156,7 +158,7 @@ impl<'a> SelectApp<'a> {
             }
             LoadState::Ready | LoadState::Unloaded => {
                 let session_view =
-                    SessionListView::new(tool_state, usize::from(area.height.saturating_sub(2)));
+                    SessionListView::new(tool_state, usize::from(block.inner(area).height));
                 let list = List::new(session_view.items)
                     .block(block)
                     .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -169,7 +171,7 @@ impl<'a> SelectApp<'a> {
 
     fn render_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let footer = Paragraph::new(vec![Line::from(self.status_line()), Self::help_line()])
-            .block(Block::default().borders(Borders::ALL).title("status"));
+            .block(titled_block("status"));
         frame.render_widget(footer, area);
     }
 
@@ -568,10 +570,14 @@ fn panel_block(title: &str, focused: bool) -> Block<'_> {
         Style::default()
     };
 
+    titled_block(title).border_style(border_style)
+}
+
+fn titled_block(title: &str) -> Block<'_> {
     Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style)
+        .padding(Padding::horizontal(PANEL_PADDING_X))
 }
 
 fn hotkey(text: &'static str) -> Span<'static> {
