@@ -52,7 +52,6 @@ fn select_sessions(
     tool: Option<Tool>,
     skip_confirmation: bool,
 ) -> Result<()> {
-    ensure_terminal()?;
     if let Some(tool) = tool {
         let sessions = registry.source(tool).list_sessions()?;
         if sessions.is_empty() {
@@ -60,6 +59,7 @@ fn select_sessions(
             return Ok(());
         }
     }
+    ensure_terminal()?;
 
     if let Some((tool, deleted)) = run_select_app(registry, tool, skip_confirmation)? {
         print_delete_outcome(tool, DeleteOutcome::Deleted(deleted));
