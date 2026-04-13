@@ -14,7 +14,6 @@ pub use codex::CodexSource;
 pub use droid::DroidSource;
 
 pub trait SessionSource {
-    fn tool(&self) -> Tool;
     fn list_sessions(&self) -> Result<Vec<SessionEntry>>;
     fn delete_sessions(&self, sessions: &[SessionEntry]) -> Result<DeleteSummary>;
 }

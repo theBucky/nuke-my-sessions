@@ -1,4 +1,7 @@
-mod selector;
+mod tui;
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
@@ -7,10 +10,7 @@ use crate::DeleteOutcome;
 use crate::model::session::{SessionEntry, Tool};
 use crate::sources::SessionSource;
 
-pub trait Prompter {
-    fn select_sessions(&mut self, sessions: &[SessionEntry]) -> Result<Vec<usize>>;
-    fn confirm_delete(&mut self, tool: Tool, selected_count: usize) -> Result<bool>;
-}
+pub use tui::run_select_app;
 
 #[derive(Default)]
 pub struct DialoguerPrompter {
@@ -32,16 +32,6 @@ impl DialoguerPrompter {
     }
 
     pub fn confirm_nuke_all(&mut self, tool: Tool, selected_count: usize) -> Result<bool> {
-        self.confirm_delete(tool, selected_count)
-    }
-}
-
-impl Prompter for DialoguerPrompter {
-    fn select_sessions(&mut self, sessions: &[SessionEntry]) -> Result<Vec<usize>> {
-        selector::select_grouped_sessions(sessions, &self.theme)
-    }
-
-    fn confirm_delete(&mut self, tool: Tool, selected_count: usize) -> Result<bool> {
         Confirm::with_theme(&self.theme)
             .with_prompt(format!("delete {selected_count} {tool} session(s)?"))
             .default(false)
@@ -50,27 +40,21 @@ impl Prompter for DialoguerPrompter {
     }
 }
 
-pub fn run_select_flow(
+pub(crate) fn delete_selected_sessions(
     source: &dyn SessionSource,
-    prompter: &mut impl Prompter,
-    skip_confirmation: bool,
+    sessions: &[SessionEntry],
+    selected_paths: &BTreeSet<PathBuf>,
 ) -> Result<DeleteOutcome> {
-    let sessions = source.list_sessions()?;
     if sessions.is_empty() {
         return Ok(DeleteOutcome::NoSessionsFound);
     }
 
-    let selected_indices = prompter.select_sessions(&sessions)?;
-    if selected_indices.is_empty() {
-        return Ok(DeleteOutcome::NoSessionsDeleted);
-    }
-
-    let selected = selected_indices
-        .into_iter()
-        .map(|index| sessions[index].clone())
+    let selected = sessions
+        .iter()
+        .filter(|session| selected_paths.contains(&session.path))
+        .cloned()
         .collect::<Vec<_>>();
-
-    if !skip_confirmation && !prompter.confirm_delete(source.tool(), selected.len())? {
+    if selected.is_empty() {
         return Ok(DeleteOutcome::NoSessionsDeleted);
     }
 
@@ -83,24 +67,21 @@ pub fn run_select_flow(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     use anyhow::Result;
 
-    use super::{Prompter, run_select_flow};
+    use super::delete_selected_sessions;
     use crate::model::session::{SessionEntry, Tool};
     use crate::sources::{DeleteSummary, SessionSource};
 
     struct FakeSource {
         sessions: Vec<SessionEntry>,
-        deleted: RefCell<Vec<String>>,
+        deleted: RefCell<Vec<PathBuf>>,
     }
 
     impl SessionSource for FakeSource {
-        fn tool(&self) -> Tool {
-            Tool::Codex
-        }
-
         fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
             Ok(self.sessions.clone())
         }
@@ -108,58 +89,71 @@ mod tests {
         fn delete_sessions(&self, sessions: &[SessionEntry]) -> Result<DeleteSummary> {
             self.deleted
                 .borrow_mut()
-                .extend(sessions.iter().map(|session| session.id.clone()));
+                .extend(sessions.iter().map(|session| session.path.clone()));
 
             Ok(DeleteSummary::success(sessions.len()))
         }
     }
 
-    struct StubPrompter {
-        selected: Vec<usize>,
-        confirmed: bool,
-    }
-
-    impl Prompter for StubPrompter {
-        fn select_sessions(&mut self, _: &[SessionEntry]) -> Result<Vec<usize>> {
-            Ok(self.selected.clone())
-        }
-
-        fn confirm_delete(&mut self, _: Tool, _: usize) -> Result<bool> {
-            Ok(self.confirmed)
-        }
-    }
-
     #[test]
-    fn deletes_selected_sessions_from_flow() {
+    fn deletes_selected_sessions() {
         let source = FakeSource {
             sessions: vec![session("a"), session("b"), session("c")],
             deleted: RefCell::new(Vec::new()),
         };
-        let mut prompter = StubPrompter {
-            selected: vec![0, 2],
-            confirmed: true,
-        };
+        let selected = BTreeSet::from([PathBuf::from("a.jsonl"), PathBuf::from("c.jsonl")]);
 
-        let deleted = run_select_flow(&source, &mut prompter, false).unwrap();
+        let deleted = delete_selected_sessions(&source, &source.sessions, &selected).unwrap();
 
         assert!(matches!(deleted, crate::DeleteOutcome::Deleted(2)));
-        assert_eq!(source.deleted.borrow().as_slice(), &["a", "c"]);
+        assert_eq!(
+            source.deleted.borrow().as_slice(),
+            &[PathBuf::from("a.jsonl"), PathBuf::from("c.jsonl")]
+        );
     }
 
     #[test]
-    fn reports_no_sessions_found_from_flow() {
+    fn only_deletes_selected_path_when_ids_collide() {
+        let source = FakeSource {
+            sessions: vec![session_in("dup", "one"), session_in("dup", "two")],
+            deleted: RefCell::new(Vec::new()),
+        };
+        let selected = BTreeSet::from([PathBuf::from("one/dup.jsonl")]);
+
+        let deleted = delete_selected_sessions(&source, &source.sessions, &selected).unwrap();
+
+        assert!(matches!(deleted, crate::DeleteOutcome::Deleted(1)));
+        assert_eq!(
+            source.deleted.borrow().as_slice(),
+            &[PathBuf::from("one/dup.jsonl")]
+        );
+    }
+
+    #[test]
+    fn reports_no_sessions_found() {
         let source = FakeSource {
             sessions: Vec::new(),
             deleted: RefCell::new(Vec::new()),
         };
-        let mut prompter = StubPrompter {
-            selected: vec![0],
-            confirmed: true,
-        };
+        let selected = BTreeSet::from([PathBuf::from("a.jsonl")]);
 
-        let deleted = run_select_flow(&source, &mut prompter, false).unwrap();
+        let deleted = delete_selected_sessions(&source, &source.sessions, &selected).unwrap();
 
         assert!(matches!(deleted, crate::DeleteOutcome::NoSessionsFound));
+        assert!(source.deleted.borrow().is_empty());
+    }
+
+    #[test]
+    fn reports_no_sessions_deleted_without_selection() {
+        let source = FakeSource {
+            sessions: vec![session("a"), session("b")],
+            deleted: RefCell::new(Vec::new()),
+        };
+
+        let deleted =
+            delete_selected_sessions(&source, &source.sessions, &BTreeSet::new()).unwrap();
+
+        assert!(matches!(deleted, crate::DeleteOutcome::NoSessionsDeleted));
         assert!(source.deleted.borrow().is_empty());
     }
 
@@ -169,6 +163,16 @@ mod tests {
             id: id.into(),
             project: None,
             path: PathBuf::from(format!("{id}.jsonl")),
+            updated_at: None,
+        }
+    }
+
+    fn session_in(id: &str, dir: &str) -> SessionEntry {
+        SessionEntry {
+            tool: Tool::Codex,
+            id: id.into(),
+            project: None,
+            path: PathBuf::from(dir).join(format!("{id}.jsonl")),
             updated_at: None,
         }
     }

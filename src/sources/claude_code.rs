@@ -75,10 +75,6 @@ impl ClaudeCodeSource {
 }
 
 impl SessionSource for ClaudeCodeSource {
-    fn tool(&self) -> Tool {
-        Tool::ClaudeCode
-    }
-
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         if !self.root.exists() {
             return Ok(Vec::new());
