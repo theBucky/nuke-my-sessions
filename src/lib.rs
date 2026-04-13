@@ -1,4 +1,4 @@
-mod delete_flow;
+mod interactive;
 mod model;
 mod sources;
 mod ui;
@@ -8,7 +8,7 @@ use std::io::{IsTerminal, stdin, stdout};
 use anyhow::{Result, bail};
 use clap::Parser;
 
-use crate::delete_flow::{DialoguerPrompter, ScopedSelection, SelectFlowOutcome, run_select_app};
+use crate::interactive::{InteractiveOutcome, Prompter, ToolSessions, run_session_browser};
 use crate::model::session::Tool;
 use crate::sources::SourceRegistry;
 use crate::ui::cli::{Cli, Command};
@@ -59,22 +59,22 @@ fn select_sessions(
     tool: Option<Tool>,
     skip_confirmation: bool,
 ) -> Result<()> {
-    let scoped = if let Some(tool) = tool {
+    let tool_sessions = if let Some(tool) = tool {
         let sessions = registry.source(tool).list_sessions()?;
         if sessions.is_empty() {
             print_delete_outcome(tool, DeleteOutcome::NoSessionsFound);
             return Ok(());
         }
         ensure_terminal()?;
-        Some(ScopedSelection { tool, sessions })
+        Some(ToolSessions { tool, sessions })
     } else {
         ensure_terminal()?;
         None
     };
 
-    match run_select_app(registry, scoped, skip_confirmation)? {
-        SelectFlowOutcome::Cancelled => {}
-        SelectFlowOutcome::Deleted(tool, deleted) => {
+    match run_session_browser(registry, tool_sessions, skip_confirmation)? {
+        InteractiveOutcome::Cancelled => {}
+        InteractiveOutcome::Deleted(tool, deleted) => {
             print_delete_outcome(tool, DeleteOutcome::Deleted(deleted));
         }
     }
@@ -95,7 +95,7 @@ fn nuke_sessions(
     let tool = match tool {
         Some(tool) => tool,
         None if stdin().is_terminal() && stdout().is_terminal() => {
-            DialoguerPrompter::default().choose_tool()
+            Prompter::default().choose_tool()
         }
         None => bail!("`nuke --all` requires `--tool` when no interactive terminal is attached"),
     };
@@ -108,7 +108,7 @@ fn nuke_sessions(
 
     if !skip_confirmation {
         ensure_terminal()?;
-        let prompter = DialoguerPrompter::default();
+        let prompter = Prompter::default();
         if !prompter.confirm_nuke_all(tool, sessions.len())? {
             print_delete_outcome(tool, DeleteOutcome::NoSessionsDeleted);
             return Ok(());

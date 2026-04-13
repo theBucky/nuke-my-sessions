@@ -10,19 +10,19 @@ use crate::DeleteOutcome;
 use crate::model::session::{SessionEntry, Tool};
 use crate::sources::SessionSource;
 
-pub(crate) use tui::{SelectFlowOutcome, run_select_app};
+pub(crate) use tui::{InteractiveOutcome, run_session_browser};
 
-pub(crate) struct ScopedSelection {
+pub(crate) struct ToolSessions {
     pub tool: Tool,
     pub sessions: Vec<SessionEntry>,
 }
 
 #[derive(Default)]
-pub struct DialoguerPrompter {
+pub struct Prompter {
     theme: ColorfulTheme,
 }
 
-impl DialoguerPrompter {
+impl Prompter {
     pub fn choose_tool(&self) -> Tool {
         let tools = Tool::all();
         let labels = tools.map(Tool::noun);
