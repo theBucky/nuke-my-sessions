@@ -1,18 +1,17 @@
-use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use directories::BaseDirs;
 use serde::Deserialize;
 
 use crate::model::session::{SessionEntry, Tool};
 
 use super::{
-    DeleteSummary, SessionSource, collect_jsonl_files, delete_entries_within_root_using,
-    delete_entry, project_from_cwd, sort_sessions_by_project,
+    DeleteSummary, SessionSource, collect_jsonl_files, configured_root,
+    delete_entries_within_root_using, delete_entry, project_from_cwd, session_file_id,
+    session_updated_at, sort_sessions_by_project,
 };
 
 const ROOT_ENV: &str = "NUKE_MY_SESSIONS_DROID_ROOT";
@@ -23,19 +22,14 @@ pub struct DroidSource {
 
 impl DroidSource {
     pub fn new() -> Result<Self> {
-        let root = match env::var_os(ROOT_ENV) {
-            Some(root) => PathBuf::from(root),
-            None => default_root()?,
-        };
-
-        Ok(Self::at(root))
+        configured_root(ROOT_ENV, &[".factory", "sessions"]).map(Self::at)
     }
 
     pub(crate) fn at(root: PathBuf) -> Self {
         Self { root }
     }
 
-    fn read_session(&self, path: PathBuf) -> Result<SessionEntry> {
+    fn read_session(path: PathBuf) -> Result<SessionEntry> {
         let file =
             fs::File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
         let reader = BufReader::new(file);
@@ -58,19 +52,11 @@ impl DroidSource {
             break;
         }
 
-        let updated_at = fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        let id = id.unwrap_or_else(|| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("unknown")
-                .to_owned()
-        });
+        let updated_at = session_updated_at(&path);
 
         Ok(SessionEntry {
             tool: Tool::Droid,
-            id,
+            id: id.unwrap_or_else(|| session_file_id(&path)),
             project: project_from_cwd(cwd.as_deref()),
             path,
             updated_at,
@@ -82,7 +68,7 @@ impl SessionSource for DroidSource {
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = collect_jsonl_files(&self.root)?
             .into_iter()
-            .map(|path| self.read_session(path))
+            .map(Self::read_session)
             .collect::<Result<Vec<_>>>()?;
 
         sort_sessions_by_project(&mut sessions);
@@ -123,15 +109,6 @@ fn is_not_found(error: &anyhow::Error) -> bool {
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_error| io_error.kind() == ErrorKind::NotFound)
     })
-}
-
-fn default_root() -> Result<PathBuf> {
-    let home = BaseDirs::new()
-        .context("failed to resolve home directory")?
-        .home_dir()
-        .to_path_buf();
-
-    Ok(home.join(".factory").join("sessions"))
 }
 
 #[cfg(test)]

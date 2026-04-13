@@ -13,12 +13,9 @@ fn list_prints_sessions_from_all_tools() {
     roots.write_codex_session("session-b", "project");
     roots.write_droid_session("session-c", "factory-project");
 
-    Command::cargo_bin("nuke-my-sessions")
-        .unwrap()
+    roots
+        .command()
         .arg("list")
-        .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &roots.claude_root)
-        .env("NUKE_MY_SESSIONS_CODEX_ROOT", &roots.codex_root)
-        .env("NUKE_MY_SESSIONS_DROID_ROOT", &roots.droid_root)
         .assert()
         .success()
         .stdout(predicate::str::contains("Claude Code:"))
@@ -39,12 +36,9 @@ fn nuke_all_yes_deletes_codex_sessions() {
     let first = roots.write_codex_session("session-a", "project");
     let second = roots.write_codex_session("session-b", "project");
 
-    Command::cargo_bin("nuke-my-sessions")
-        .unwrap()
+    roots
+        .command()
         .args(["nuke", "--tool", "codex", "--all", "--yes"])
-        .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &roots.claude_root)
-        .env("NUKE_MY_SESSIONS_CODEX_ROOT", &roots.codex_root)
-        .env("NUKE_MY_SESSIONS_DROID_ROOT", &roots.droid_root)
         .assert()
         .success()
         .stdout(predicate::str::contains("Codex: deleted 2 session(s)"));
@@ -60,12 +54,9 @@ fn nuke_all_yes_deletes_droid_session_pairs() {
     let first = roots.write_droid_session("session-a", "project");
     let second = roots.write_droid_session("session-b", "project");
 
-    Command::cargo_bin("nuke-my-sessions")
-        .unwrap()
+    roots
+        .command()
         .args(["nuke", "--tool", "droid", "--all", "--yes"])
-        .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &roots.claude_root)
-        .env("NUKE_MY_SESSIONS_CODEX_ROOT", &roots.codex_root)
-        .env("NUKE_MY_SESSIONS_DROID_ROOT", &roots.droid_root)
         .assert()
         .success()
         .stdout(predicate::str::contains("Droid: deleted 2 session(s)"));
@@ -81,34 +72,69 @@ fn nuke_all_yes_reports_when_no_sessions_exist() {
     let temp = tempdir().unwrap();
     let roots = TestRoots::new(temp.path());
 
-    Command::cargo_bin("nuke-my-sessions")
-        .unwrap()
+    roots
+        .command()
         .args(["nuke", "--tool", "codex", "--all", "--yes"])
-        .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &roots.claude_root)
-        .env("NUKE_MY_SESSIONS_CODEX_ROOT", &roots.codex_root)
-        .env("NUKE_MY_SESSIONS_DROID_ROOT", &roots.droid_root)
         .assert()
         .success()
         .stdout(predicate::str::contains("Codex: no sessions found"));
 }
 
+#[test]
+fn select_scoped_tool_reports_no_sessions_without_tty() {
+    let temp = tempdir().unwrap();
+    let roots = TestRoots::new(temp.path());
+
+    roots
+        .command()
+        .args(["select", "--tool", "codex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex: no sessions found"));
+}
+
+#[test]
+fn select_scoped_tool_requires_tty_when_sessions_exist() {
+    let temp = tempdir().unwrap();
+    let roots = TestRoots::new(temp.path());
+    roots.write_codex_session("session-a", "project");
+
+    roots
+        .command()
+        .args(["select", "--tool", "codex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "interactive mode requires a terminal",
+        ));
+}
+
 struct TestRoots {
-    claude_root: PathBuf,
-    codex_root: PathBuf,
-    droid_root: PathBuf,
+    claude: PathBuf,
+    codex: PathBuf,
+    droid: PathBuf,
 }
 
 impl TestRoots {
     fn new(root: &Path) -> Self {
         Self {
-            claude_root: root.join(".claude").join("projects"),
-            codex_root: root.join(".codex").join("sessions"),
-            droid_root: root.join(".factory").join("sessions"),
+            claude: root.join(".claude").join("projects"),
+            codex: root.join(".codex").join("sessions"),
+            droid: root.join(".factory").join("sessions"),
         }
     }
 
+    fn command(&self) -> Command {
+        let mut command = Command::cargo_bin("nuke-my-sessions").unwrap();
+        command
+            .env("NUKE_MY_SESSIONS_CLAUDE_ROOT", &self.claude)
+            .env("NUKE_MY_SESSIONS_CODEX_ROOT", &self.codex)
+            .env("NUKE_MY_SESSIONS_DROID_ROOT", &self.droid);
+        command
+    }
+
     fn write_claude_session(&self, id: &str, prompt: &str, project: &str) -> PathBuf {
-        let project_root = self.claude_root.join(format!("repo-{project}"));
+        let project_root = self.claude.join(format!("repo-{project}"));
         fs::create_dir_all(&project_root).unwrap();
         let path = project_root.join(format!("{id}.jsonl"));
         fs::write(
@@ -124,7 +150,7 @@ impl TestRoots {
     }
 
     fn write_codex_session(&self, id: &str, project: &str) -> PathBuf {
-        let session_root = self.codex_root.join("2026").join("04").join("11");
+        let session_root = self.codex.join("2026").join("04").join("11");
         fs::create_dir_all(&session_root).unwrap();
 
         let path = session_root.join(format!("rollout-{id}.jsonl"));
@@ -141,7 +167,7 @@ impl TestRoots {
     }
 
     fn write_droid_session(&self, id: &str, project: &str) -> DroidSessionFiles {
-        let session_root = self.droid_root.join(format!("repo-{project}"));
+        let session_root = self.droid.join(format!("repo-{project}"));
         fs::create_dir_all(&session_root).unwrap();
 
         let jsonl = session_root.join(format!("{id}.jsonl"));

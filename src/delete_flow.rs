@@ -10,7 +10,12 @@ use crate::DeleteOutcome;
 use crate::model::session::{SessionEntry, Tool};
 use crate::sources::SessionSource;
 
-pub use tui::run_select_app;
+pub(crate) use tui::{SelectFlowOutcome, run_select_app};
+
+pub(crate) struct ScopedSelection {
+    pub tool: Tool,
+    pub sessions: Vec<SessionEntry>,
+}
 
 #[derive(Default)]
 pub struct DialoguerPrompter {
@@ -31,7 +36,7 @@ impl DialoguerPrompter {
         tools[selection]
     }
 
-    pub fn confirm_nuke_all(&mut self, tool: Tool, selected_count: usize) -> Result<bool> {
+    pub fn confirm_nuke_all(&self, tool: Tool, selected_count: usize) -> Result<bool> {
         Confirm::with_theme(&self.theme)
             .with_prompt(format!("delete {selected_count} {tool} session(s)?"))
             .default(false)

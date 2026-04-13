@@ -1,5 +1,5 @@
 use crate::DeleteOutcome;
-use crate::model::session::{SessionEntry, Tool};
+use crate::model::session::{SessionEntry, Tool, for_each_project_group};
 
 pub fn print_tool_header(tool: Tool) {
     println!("{tool}:");
@@ -11,16 +11,12 @@ pub fn print_sessions(sessions: &[SessionEntry]) {
         return;
     }
 
-    let mut current_project: Option<&str> = None;
-    for session in sessions {
-        let project = session.project_name();
-        if current_project != Some(project) {
-            println!("  [{project}]");
-            current_project = Some(project);
+    for_each_project_group(sessions, |project, sessions| {
+        println!("  [{project}]");
+        for session in sessions {
+            println!("    {}", session.display_line());
         }
-
-        println!("    {}", session.display_line());
-    }
+    });
 }
 
 pub fn print_delete_outcome(tool: Tool, outcome: DeleteOutcome) {
@@ -28,7 +24,7 @@ pub fn print_delete_outcome(tool: Tool, outcome: DeleteOutcome) {
         DeleteOutcome::NoSessionsFound => println!("{tool}: no sessions found"),
         DeleteOutcome::NoSessionsDeleted => println!("{tool}: no sessions deleted"),
         DeleteOutcome::Deleted(deleted_count) => {
-            println!("{tool}: deleted {deleted_count} session(s)")
+            println!("{tool}: deleted {deleted_count} session(s)");
         }
     }
 }

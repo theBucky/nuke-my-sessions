@@ -2,10 +2,13 @@ mod claude_code;
 mod codex;
 mod droid;
 
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
+use directories::BaseDirs;
 
 use crate::model::session::{SessionEntry, Tool};
 
@@ -142,10 +145,29 @@ pub fn collect_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+pub(crate) fn configured_root(root_env: &str, default_segments: &[&str]) -> Result<PathBuf> {
+    env::var_os(root_env)
+        .map(PathBuf::from)
+        .map_or_else(|| default_root(default_segments), Ok)
+}
+
 pub(crate) fn project_from_cwd(cwd: Option<&Path>) -> Option<String> {
     cwd.and_then(Path::file_name)
         .and_then(|name| name.to_str())
         .map(ToOwned::to_owned)
+}
+
+pub(crate) fn session_file_id(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+pub(crate) fn session_updated_at(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 pub(crate) fn sort_sessions_by_project(sessions: &mut [SessionEntry]) {
@@ -179,6 +201,15 @@ fn collect_jsonl_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> Result<()
     }
 
     Ok(())
+}
+
+fn default_root(path_segments: &[&str]) -> Result<PathBuf> {
+    let mut path = BaseDirs::new()
+        .context("failed to resolve home directory")?
+        .home_dir()
+        .to_path_buf();
+    path.extend(path_segments);
+    Ok(path)
 }
 
 #[cfg(test)]

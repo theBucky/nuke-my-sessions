@@ -52,3 +52,22 @@ impl SessionEntry {
         &self.id
     }
 }
+
+// Sessions must already be sorted so equal project names stay contiguous.
+pub(crate) fn for_each_project_group(
+    sessions: &[SessionEntry],
+    mut visit: impl FnMut(&str, &[SessionEntry]),
+) {
+    let mut start = 0;
+    while start < sessions.len() {
+        let project = sessions[start].project_name();
+        let mut end = start + 1;
+
+        while end < sessions.len() && sessions[end].project_name() == project {
+            end += 1;
+        }
+
+        visit(project, &sessions[start..end]);
+        start = end;
+    }
+}

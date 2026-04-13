@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
@@ -17,17 +18,23 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use super::delete_selected_sessions;
+use super::{ScopedSelection, delete_selected_sessions};
 use crate::DeleteOutcome;
-use crate::model::session::{SessionEntry, Tool};
+use crate::model::session::{SessionEntry, Tool, for_each_project_group};
 use crate::sources::SourceRegistry;
+
+const TOOLS_PANEL_WIDTH: u16 = 24;
+const FOOTER_HEIGHT: u16 = 4;
+const NO_SESSIONS_STATUS: &str = "no sessions found";
+const EMPTY_SELECTION_STATUS: &str = "select at least one session";
 
 pub fn run_select_app(
     registry: &SourceRegistry,
-    initial_tool: Option<Tool>,
+    scoped: Option<ScopedSelection>,
     skip_confirmation: bool,
-) -> Result<Option<(Tool, usize)>> {
-    let mut app = SelectApp::new(registry, initial_tool, skip_confirmation)?;
+) -> Result<SelectFlowOutcome> {
+    let mut app = SelectApp::new(registry, scoped, skip_confirmation)?;
+
     let mut terminal = TerminalGuard::new()?;
 
     loop {
@@ -42,10 +49,17 @@ pub fn run_select_app(
 
         match app.handle_key(key)? {
             AppEvent::Continue => {}
-            AppEvent::Quit => return Ok(None),
-            AppEvent::Deleted(tool, deleted) => return Ok(Some((tool, deleted))),
+            AppEvent::Quit => return Ok(SelectFlowOutcome::Cancelled),
+            AppEvent::Deleted(tool, deleted) => {
+                return Ok(SelectFlowOutcome::Deleted(tool, deleted));
+            }
         }
     }
+}
+
+pub(crate) enum SelectFlowOutcome {
+    Cancelled,
+    Deleted(Tool, usize),
 }
 
 struct SelectApp<'a> {
@@ -55,28 +69,26 @@ struct SelectApp<'a> {
     focus: Focus,
     pending_delete: bool,
     skip_confirmation: bool,
-    session_page_size: usize,
+    session_page_size: i16,
     status: Option<String>,
 }
 
 impl<'a> SelectApp<'a> {
     fn new(
         registry: &'a SourceRegistry,
-        initial_tool: Option<Tool>,
+        scoped: Option<ScopedSelection>,
         skip_confirmation: bool,
     ) -> Result<Self> {
-        let scoped_tool = initial_tool;
-        let tools = initial_tool
-            .map(|tool| vec![tool])
-            .unwrap_or_else(|| Tool::all().to_vec())
-            .into_iter()
-            .map(ToolState::unloaded)
-            .collect();
+        let is_scoped = scoped.is_some();
+        let tools = match scoped {
+            Some(ScopedSelection { tool, sessions }) => vec![ToolState::loaded(tool, sessions)],
+            None => Tool::all().into_iter().map(ToolState::unloaded).collect(),
+        };
         let mut app = Self {
             registry,
             tools,
             active_tool: 0,
-            focus: if initial_tool.is_some() {
+            focus: if is_scoped {
                 Focus::Sessions
             } else {
                 Focus::Tools
@@ -86,14 +98,11 @@ impl<'a> SelectApp<'a> {
             session_page_size: 1,
             status: None,
         };
+
         match app.load_active_tool() {
-            Ok(()) => {
-                if app.current_tool().sessions.is_empty() {
-                    app.status = Some(String::from("no sessions found"));
-                }
-            }
+            Ok(()) => app.sync_status_with_active_tool(),
             Err(error) => {
-                if scoped_tool.is_some() {
+                if is_scoped {
                     return Err(error);
                 }
                 app.status = Some(format!("{}: {error}", app.current_tool().tool));
@@ -106,14 +115,15 @@ impl<'a> SelectApp<'a> {
     fn render(&mut self, frame: &mut Frame<'_>) {
         let [body, footer] = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(4)])
+            .constraints([Constraint::Min(1), Constraint::Length(FOOTER_HEIGHT)])
             .areas(frame.area());
         let [tools, sessions] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(24), Constraint::Min(1)])
+            .constraints([Constraint::Length(TOOLS_PANEL_WIDTH), Constraint::Min(1)])
             .areas(body);
 
-        self.session_page_size = usize::from(sessions.height.saturating_sub(2)).max(1);
+        self.session_page_size =
+            i16::try_from(sessions.height.saturating_sub(2).max(1)).unwrap_or(i16::MAX);
         self.render_tools(frame, tools);
         self.render_sessions(frame, sessions);
         self.render_footer(frame, footer);
@@ -135,43 +145,50 @@ impl<'a> SelectApp<'a> {
     fn render_sessions(&self, frame: &mut Frame<'_>, area: Rect) {
         let tool_state = self.current_tool();
         let title = format!("sessions: {}", tool_state.tool);
+        let block = panel_block(&title, self.focus == Focus::Sessions);
 
-        if let LoadState::Failed(error) = &tool_state.load_state {
-            let error = Paragraph::new(error.as_str())
-                .block(panel_block(&title, self.focus == Focus::Sessions));
-            frame.render_widget(error, area);
-            return;
+        match &tool_state.load_state {
+            LoadState::Failed(error) => {
+                frame.render_widget(Paragraph::new(error.as_str()).block(block), area);
+            }
+            LoadState::Ready | LoadState::Unloaded if tool_state.sessions.is_empty() => {
+                frame.render_widget(Paragraph::new("no sessions").block(block), area);
+            }
+            LoadState::Ready | LoadState::Unloaded => {
+                let session_view =
+                    SessionListView::new(tool_state, usize::from(area.height.saturating_sub(2)));
+                let list = List::new(session_view.items)
+                    .block(block)
+                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                let mut state = ListState::default();
+                state.select(session_view.selected_row);
+                frame.render_stateful_widget(list, area, &mut state);
+            }
         }
-
-        if tool_state.sessions.is_empty() {
-            let empty = Paragraph::new("no sessions")
-                .block(panel_block(&title, self.focus == Focus::Sessions));
-            frame.render_widget(empty, area);
-            return;
-        }
-
-        let session_view = session_view(tool_state, usize::from(area.height.saturating_sub(2)));
-        let list = List::new(session_view.items)
-            .block(panel_block(&title, self.focus == Focus::Sessions))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        let mut state = ListState::default();
-        state.select(session_view.selected_row);
-        frame.render_stateful_widget(list, area, &mut state);
     }
 
     fn render_footer(&self, frame: &mut Frame<'_>, area: Rect) {
-        let tool_state = self.current_tool();
-        let status = if self.pending_delete {
-            format!(
+        let footer = Paragraph::new(vec![Line::from(self.status_line()), Self::help_line()])
+            .block(Block::default().borders(Borders::ALL).title("status"));
+        frame.render_widget(footer, area);
+    }
+
+    fn status_line(&self) -> Cow<'_, str> {
+        if self.pending_delete {
+            return Cow::Owned(format!(
                 "press enter again to delete {} session(s), move or esc to cancel",
-                tool_state.selected.len()
-            )
-        } else {
-            self.status
-                .clone()
-                .unwrap_or_else(|| format!("{} selected", tool_state.selected.len()))
-        };
-        let help = Line::from(vec![
+                self.current_tool().selected.len()
+            ));
+        }
+
+        self.status.as_deref().map_or_else(
+            || Cow::Owned(format!("{} selected", self.current_tool().selected.len())),
+            Cow::Borrowed,
+        )
+    }
+
+    fn help_line() -> Line<'static> {
+        Line::from(vec![
             hotkey("up/down"),
             plain(": move  "),
             hotkey("tab"),
@@ -184,77 +201,78 @@ impl<'a> SelectApp<'a> {
             plain(": submit  "),
             hotkey("ctrl+c"),
             plain(": quit"),
-        ]);
-        let footer = Paragraph::new(vec![Line::from(status), help])
-            .block(Block::default().borders(Borders::ALL).title("status"));
-        frame.render_widget(footer, area);
+        ])
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<AppEvent> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if is_ctrl_c(key) {
             return Ok(AppEvent::Quit);
         }
 
         match key.code {
-            KeyCode::Esc => self.pending_delete = false,
-            KeyCode::Tab => {
-                self.pending_delete = false;
-                self.focus = self.focus.next();
-            }
-            KeyCode::Up => {
-                self.pending_delete = false;
-                match self.focus {
-                    Focus::Tools => self.move_tool_cursor(-1),
-                    Focus::Sessions => self.current_tool_mut().move_cursor(-1),
-                }
-            }
-            KeyCode::Down => {
-                self.pending_delete = false;
-                match self.focus {
-                    Focus::Tools => self.move_tool_cursor(1),
-                    Focus::Sessions => self.current_tool_mut().move_cursor(1),
-                }
-            }
-            KeyCode::Char('j') => {
-                self.pending_delete = false;
-                if self.focus == Focus::Sessions {
-                    let page = self.session_page_size;
-                    self.current_tool_mut().page_cursor(page as isize);
-                }
-            }
-            KeyCode::Char('k') => {
-                self.pending_delete = false;
-                if self.focus == Focus::Sessions {
-                    let page = self.session_page_size;
-                    self.current_tool_mut().page_cursor(-(page as isize));
-                }
-            }
-            KeyCode::Char(' ') => {
-                self.pending_delete = false;
-                if self.focus == Focus::Sessions {
-                    self.current_tool_mut().toggle_selected();
-                    self.status = None;
-                }
-            }
-            KeyCode::Enter => {
-                if self.focus == Focus::Sessions {
-                    return self.submit_current_tool();
-                }
-                self.pending_delete = false;
-                self.focus = Focus::Sessions;
-            }
+            KeyCode::Esc => self.clear_pending_delete(),
+            KeyCode::Tab => self.toggle_focus(),
+            KeyCode::Up => self.move_focus_cursor(-1),
+            KeyCode::Down => self.move_focus_cursor(1),
+            KeyCode::Char('j') => self.move_session_page(1),
+            KeyCode::Char('k') => self.move_session_page(-1),
+            KeyCode::Char(' ') => self.toggle_current_session(),
+            KeyCode::Enter => return self.handle_enter(),
             _ => {}
         }
 
         Ok(AppEvent::Continue)
     }
 
+    fn handle_enter(&mut self) -> Result<AppEvent> {
+        if self.focus == Focus::Sessions {
+            return self.submit_current_tool();
+        }
+
+        self.clear_pending_delete();
+        self.focus = Focus::Sessions;
+        Ok(AppEvent::Continue)
+    }
+
+    fn move_focus_cursor(&mut self, direction: isize) {
+        self.clear_pending_delete();
+
+        match self.focus {
+            Focus::Tools => self.move_tool_cursor(direction),
+            Focus::Sessions => self.current_tool_mut().move_cursor(direction),
+        }
+    }
+
+    fn move_session_page(&mut self, page_direction: isize) {
+        if self.focus != Focus::Sessions {
+            return;
+        }
+
+        self.clear_pending_delete();
+        let offset = isize::from(self.session_page_size) * page_direction;
+        self.current_tool_mut().move_cursor(offset);
+    }
+
+    fn toggle_current_session(&mut self) {
+        if self.focus != Focus::Sessions {
+            return;
+        }
+
+        self.clear_pending_delete();
+        self.current_tool_mut().toggle_selected();
+        self.status = None;
+    }
+
+    fn toggle_focus(&mut self) {
+        self.clear_pending_delete();
+        self.focus = self.focus.next();
+    }
+
     fn submit_current_tool(&mut self) -> Result<AppEvent> {
         let tool = self.current_tool().tool;
-        let selected_paths = self.current_tool().selected.clone();
-        if selected_paths.is_empty() {
-            self.pending_delete = false;
-            self.status = Some(String::from("select at least one session"));
+        if self.current_tool().selected.is_empty() {
+            self.clear_pending_delete();
+            self.status = Some(String::from(EMPTY_SELECTION_STATUS));
             return Ok(AppEvent::Continue);
         }
 
@@ -263,22 +281,27 @@ impl<'a> SelectApp<'a> {
             return Ok(AppEvent::Continue);
         }
 
-        let sessions = self.current_tool().sessions.clone();
-        let outcome =
-            delete_selected_sessions(self.registry.source(tool), &sessions, &selected_paths)?;
-        self.pending_delete = false;
+        let outcome = {
+            let tool_state = self.current_tool();
+            delete_selected_sessions(
+                self.registry.source(tool),
+                &tool_state.sessions,
+                &tool_state.selected,
+            )?
+        };
+        self.clear_pending_delete();
 
         match outcome {
-            DeleteOutcome::Deleted(deleted) => {
-                return Ok(AppEvent::Deleted(tool, deleted));
+            DeleteOutcome::Deleted(deleted) => Ok(AppEvent::Deleted(tool, deleted)),
+            DeleteOutcome::NoSessionsFound => {
+                self.status = Some(String::from(NO_SESSIONS_STATUS));
+                Ok(AppEvent::Continue)
             }
-            DeleteOutcome::NoSessionsFound => self.status = Some(String::from("no sessions found")),
             DeleteOutcome::NoSessionsDeleted => {
-                self.status = Some(String::from("select at least one session"));
+                self.status = Some(String::from(EMPTY_SELECTION_STATUS));
+                Ok(AppEvent::Continue)
             }
         }
-
-        Ok(AppEvent::Continue)
     }
 
     fn move_tool_cursor(&mut self, direction: isize) {
@@ -288,17 +311,24 @@ impl<'a> SelectApp<'a> {
         }
 
         self.active_tool = next;
-        self.pending_delete = false;
         match self.load_active_tool() {
-            Ok(()) => {
-                self.status = self
-                    .current_tool()
-                    .sessions
-                    .is_empty()
-                    .then_some(String::from("no sessions found"));
+            Ok(()) => self.sync_status_with_active_tool(),
+            Err(error) => {
+                self.status = Some(format!("{}: {error}", self.current_tool().tool));
             }
-            Err(error) => self.status = Some(format!("{}: {error}", self.current_tool().tool)),
         }
+    }
+
+    fn sync_status_with_active_tool(&mut self) {
+        self.status = self
+            .current_tool()
+            .sessions
+            .is_empty()
+            .then_some(String::from(NO_SESSIONS_STATUS));
+    }
+
+    fn clear_pending_delete(&mut self) {
+        self.pending_delete = false;
     }
 
     fn current_tool(&self) -> &ToolState {
@@ -310,9 +340,7 @@ impl<'a> SelectApp<'a> {
     }
 
     fn load_active_tool(&mut self) -> Result<()> {
-        let active_tool = self.active_tool;
-        let registry = self.registry;
-        self.tools[active_tool].load(registry)
+        self.tools[self.active_tool].load(self.registry)
     }
 }
 
@@ -348,12 +376,6 @@ struct ToolState {
     load_state: LoadState,
 }
 
-enum LoadState {
-    Unloaded,
-    Ready,
-    Failed(String),
-}
-
 impl ToolState {
     fn unloaded(tool: Tool) -> Self {
         Self {
@@ -368,6 +390,12 @@ impl ToolState {
         }
     }
 
+    fn loaded(tool: Tool, sessions: Vec<SessionEntry>) -> Self {
+        let mut state = Self::unloaded(tool);
+        state.set_sessions_ready(sessions);
+        state
+    }
+
     fn load(&mut self, registry: &SourceRegistry) -> Result<()> {
         if matches!(self.load_state, LoadState::Ready) {
             return Ok(());
@@ -375,28 +403,11 @@ impl ToolState {
 
         match registry.source(self.tool).list_sessions() {
             Ok(sessions) => {
-                self.sessions = sessions;
-                let row_cache = build_display_rows(&self.sessions);
-                self.rows = row_cache.rows;
-                self.session_rows = row_cache.session_rows;
-                self.cursor = self.cursor.min(self.sessions.len().saturating_sub(1));
-                self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
-                let current_paths = self
-                    .sessions
-                    .iter()
-                    .map(|session| session.path.clone())
-                    .collect::<BTreeSet<_>>();
-                self.selected.retain(|path| current_paths.contains(path));
-                self.load_state = LoadState::Ready;
+                self.set_sessions_ready(sessions);
                 Ok(())
             }
             Err(error) => {
-                self.sessions.clear();
-                self.rows.clear();
-                self.session_rows.clear();
-                self.selected.clear();
-                self.cursor = 0;
-                self.cursor_row = 0;
+                self.reset();
                 self.load_state = LoadState::Failed(error.to_string());
                 Err(error)
             }
@@ -411,10 +422,6 @@ impl ToolState {
 
         self.cursor = offset_index(self.cursor, direction, self.sessions.len());
         self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
-    }
-
-    fn page_cursor(&mut self, direction: isize) {
-        self.move_cursor(direction);
     }
 
     fn toggle_selected(&mut self) {
@@ -434,11 +441,45 @@ impl ToolState {
             LoadState::Unloaded => String::from("-"),
         }
     }
+
+    fn apply_row_cache(&mut self) {
+        let row_cache = RowCache::build(&self.sessions);
+        self.rows = row_cache.rows;
+        self.session_rows = row_cache.session_rows;
+        self.cursor = self.cursor.min(self.sessions.len().saturating_sub(1));
+        self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
+    }
+
+    fn retain_existing_selection(&mut self) {
+        let current_paths = self
+            .sessions
+            .iter()
+            .map(|session| session.path.clone())
+            .collect::<BTreeSet<_>>();
+        self.selected.retain(|path| current_paths.contains(path));
+    }
+
+    fn set_sessions_ready(&mut self, sessions: Vec<SessionEntry>) {
+        self.sessions = sessions;
+        self.apply_row_cache();
+        self.retain_existing_selection();
+        self.load_state = LoadState::Ready;
+    }
+
+    fn reset(&mut self) {
+        self.sessions.clear();
+        self.rows.clear();
+        self.session_rows.clear();
+        self.selected.clear();
+        self.cursor = 0;
+        self.cursor_row = 0;
+    }
 }
 
-struct SessionListView {
-    items: Vec<ListItem<'static>>,
-    selected_row: Option<usize>,
+enum LoadState {
+    Unloaded,
+    Ready,
+    Failed(String),
 }
 
 struct RowCache {
@@ -446,70 +487,77 @@ struct RowCache {
     session_rows: Vec<usize>,
 }
 
+impl RowCache {
+    fn build(sessions: &[SessionEntry]) -> Self {
+        let mut rows = Vec::new();
+        let mut session_rows = Vec::with_capacity(sessions.len());
+        let mut session_index = 0;
+
+        for_each_project_group(sessions, |project, project_sessions| {
+            rows.push(DisplayRow::Header(format!("  [{project}]")));
+            for session in project_sessions {
+                rows.push(DisplayRow::Session {
+                    session_index,
+                    text: session.display_line().to_owned(),
+                });
+                session_rows.push(rows.len().saturating_sub(1));
+                session_index += 1;
+            }
+        });
+
+        Self { rows, session_rows }
+    }
+}
+
 enum DisplayRow {
     Header(String),
     Session { session_index: usize, text: String },
 }
 
-fn build_display_rows(sessions: &[SessionEntry]) -> RowCache {
-    let mut rows = Vec::new();
-    let mut session_rows = Vec::with_capacity(sessions.len());
-    let mut current_project: Option<&str> = None;
-
-    for (session_index, session) in sessions.iter().enumerate() {
-        let project = session.project_name();
-        if current_project != Some(project) {
-            rows.push(DisplayRow::Header(format!("  [{project}]")));
-            current_project = Some(project);
-        }
-
-        rows.push(DisplayRow::Session {
-            session_index,
-            text: session.display_line().to_owned(),
-        });
-        session_rows.push(rows.len().saturating_sub(1));
-    }
-
-    RowCache { rows, session_rows }
+struct SessionListView {
+    items: Vec<ListItem<'static>>,
+    selected_row: Option<usize>,
 }
 
-fn session_view(tool_state: &ToolState, visible_rows: usize) -> SessionListView {
-    let visible_rows = visible_rows.max(1);
-    let cursor_row = tool_state.cursor_row;
-    let max_start = tool_state.rows.len().saturating_sub(visible_rows);
-    let start = cursor_row.saturating_sub(visible_rows / 2).min(max_start);
-    let end = (start + visible_rows).min(tool_state.rows.len());
+impl SessionListView {
+    fn new(tool_state: &ToolState, visible_rows: usize) -> Self {
+        let visible_rows = visible_rows.max(1);
+        let cursor_row = tool_state.cursor_row;
+        let max_start = tool_state.rows.len().saturating_sub(visible_rows);
+        let start = cursor_row.saturating_sub(visible_rows / 2).min(max_start);
+        let end = (start + visible_rows).min(tool_state.rows.len());
 
-    let items = tool_state.rows[start..end]
-        .iter()
-        .map(|row| match row {
-            DisplayRow::Header(text) => ListItem::new(Line::from(vec![Span::styled(
-                text.clone(),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            DisplayRow::Session {
-                session_index,
-                text,
-            } => {
-                let marker = if tool_state
-                    .selected
-                    .contains(&tool_state.sessions[*session_index].path)
-                {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
+        let items = tool_state.rows[start..end]
+            .iter()
+            .map(|row| match row {
+                DisplayRow::Header(text) => ListItem::new(Line::from(vec![Span::styled(
+                    text.clone(),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )])),
+                DisplayRow::Session {
+                    session_index,
+                    text,
+                } => {
+                    let marker = if tool_state
+                        .selected
+                        .contains(&tool_state.sessions[*session_index].path)
+                    {
+                        "[x]"
+                    } else {
+                        "[ ]"
+                    };
 
-                ListItem::new(format!(" {marker} {text}"))
-            }
-        })
-        .collect();
+                    ListItem::new(format!(" {marker} {text}"))
+                }
+            })
+            .collect();
 
-    SessionListView {
-        items,
-        selected_row: Some(cursor_row - start),
+        Self {
+            items,
+            selected_row: Some(cursor_row - start),
+        }
     }
 }
 
@@ -537,6 +585,10 @@ fn hotkey(text: &'static str) -> Span<'static> {
 
 fn plain(text: &'static str) -> Span<'static> {
     Span::raw(text)
+}
+
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
 }
 
 fn offset_index(current: usize, offset: isize, len: usize) -> usize {
