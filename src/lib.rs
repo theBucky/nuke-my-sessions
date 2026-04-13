@@ -7,9 +7,8 @@ use std::io::{IsTerminal, stdin, stdout};
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use dialoguer::console::Term;
 
-use crate::delete_flow::{DialoguerPrompter, run_select_flow};
+use crate::delete_flow::{DialoguerPrompter, run_select_app};
 use crate::model::session::Tool;
 use crate::sources::SourceRegistry;
 use crate::ui::cli::{Cli, Command};
@@ -23,7 +22,6 @@ pub(crate) enum DeleteOutcome {
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    clear_terminal_on_launch()?;
 
     let registry = SourceRegistry::new()?;
     match cli.command.unwrap_or(Command::Select) {
@@ -55,11 +53,9 @@ fn select_sessions(
     skip_confirmation: bool,
 ) -> Result<()> {
     ensure_terminal()?;
-
-    let mut prompter = DialoguerPrompter::default();
-    let tool = tool.unwrap_or_else(|| prompter.choose_tool());
-    let outcome = run_select_flow(registry.source(tool), &mut prompter, skip_confirmation)?;
-    print_delete_outcome(tool, outcome);
+    if let Some((tool, deleted)) = run_select_app(registry, tool, skip_confirmation)? {
+        print_delete_outcome(tool, DeleteOutcome::Deleted(deleted));
+    }
 
     Ok(())
 }
@@ -108,12 +104,4 @@ fn ensure_terminal() -> Result<()> {
     }
 
     bail!("interactive mode requires a terminal")
-}
-
-fn clear_terminal_on_launch() -> Result<()> {
-    if !stdout().is_terminal() {
-        return Ok(());
-    }
-
-    Term::stdout().clear_screen().map_err(Into::into)
 }

@@ -79,10 +79,6 @@ impl DroidSource {
 }
 
 impl SessionSource for DroidSource {
-    fn tool(&self) -> Tool {
-        Tool::Droid
-    }
-
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = collect_jsonl_files(&self.root)?
             .into_iter()

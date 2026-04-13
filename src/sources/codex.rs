@@ -80,10 +80,6 @@ impl CodexSource {
 }
 
 impl SessionSource for CodexSource {
-    fn tool(&self) -> Tool {
-        Tool::Codex
-    }
-
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = collect_jsonl_files(&self.root)?
             .into_iter()
