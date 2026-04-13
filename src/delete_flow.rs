@@ -78,7 +78,7 @@ mod tests {
 
     struct FakeSource {
         sessions: Vec<SessionEntry>,
-        deleted: RefCell<Vec<String>>,
+        deleted: RefCell<Vec<PathBuf>>,
     }
 
     impl SessionSource for FakeSource {
@@ -89,7 +89,7 @@ mod tests {
         fn delete_sessions(&self, sessions: &[SessionEntry]) -> Result<DeleteSummary> {
             self.deleted
                 .borrow_mut()
-                .extend(sessions.iter().map(|session| session.id.clone()));
+                .extend(sessions.iter().map(|session| session.path.clone()));
 
             Ok(DeleteSummary::success(sessions.len()))
         }
@@ -106,7 +106,10 @@ mod tests {
         let deleted = delete_selected_sessions(&source, &source.sessions, &selected).unwrap();
 
         assert!(matches!(deleted, crate::DeleteOutcome::Deleted(2)));
-        assert_eq!(source.deleted.borrow().as_slice(), &["a", "c"]);
+        assert_eq!(
+            source.deleted.borrow().as_slice(),
+            &[PathBuf::from("a.jsonl"), PathBuf::from("c.jsonl")]
+        );
     }
 
     #[test]
@@ -120,8 +123,10 @@ mod tests {
         let deleted = delete_selected_sessions(&source, &source.sessions, &selected).unwrap();
 
         assert!(matches!(deleted, crate::DeleteOutcome::Deleted(1)));
-        assert_eq!(source.deleted.borrow().as_slice(), &["dup"]);
-        assert_eq!(source.deleted.borrow().len(), 1);
+        assert_eq!(
+            source.deleted.borrow().as_slice(),
+            &[PathBuf::from("one/dup.jsonl")]
+        );
     }
 
     #[test]

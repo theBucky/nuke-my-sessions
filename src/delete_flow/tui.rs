@@ -76,7 +76,11 @@ impl<'a> SelectApp<'a> {
             registry,
             tools,
             active_tool: 0,
-            focus: Focus::Tools,
+            focus: if initial_tool.is_some() {
+                Focus::Sessions
+            } else {
+                Focus::Tools
+            },
             pending_delete: false,
             skip_confirmation,
             session_page_size: 1,
@@ -232,7 +236,13 @@ impl<'a> SelectApp<'a> {
                     self.status = None;
                 }
             }
-            KeyCode::Enter => return self.submit_current_tool(),
+            KeyCode::Enter => {
+                if self.focus == Focus::Sessions {
+                    return self.submit_current_tool();
+                }
+                self.pending_delete = false;
+                self.focus = Focus::Sessions;
+            }
             _ => {}
         }
 
