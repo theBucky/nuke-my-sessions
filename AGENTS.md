@@ -4,11 +4,13 @@ Rust CLI to nuke all or selected sessions in Claude Code, Codex, and Droid.
 
 ## Where to look
 
-- `src/sources/`: session discovery and deletion per tool
-- `src/delete_flow/`: interactive selection UI (paging, rows)
-- `src/model/`: domain types (`SessionEntry`, `Tool`)
+- `src/lib.rs`: command orchestration for `list`, `select`, and `nuke`
+- `src/delete_flow.rs`: dialoguer prompts, scoped selection, deletion wiring
+- `src/delete_flow/tui.rs`: ratatui session browser and keyboard flow
+- `src/sources/`: per-tool session discovery; `mod.rs` owns registry, shared root helpers, jsonl collection, and guarded deletion
+- `src/model/session.rs`: domain types plus grouped session rendering helpers
 - `src/ui/`: CLI args and output formatting
-- `tests/cli.rs`: integration tests
+- `tests/cli.rs`: integration tests and temp-root fixture helpers
 
 ## Workflow
 
