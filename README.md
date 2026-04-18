@@ -1,51 +1,51 @@
 # nuke-my-sessions
 
-CLI to list and delete local session history for Claude Code, Codex, and Droid.
+Delete local session history for Claude Code, Codex, and Droid.
 
-## Run
-
-```sh
-cargo run --
-cargo run -- list
-cargo run -- nuke --tool codex --all --yes
-```
-
-## Build
+## Installation
 
 ```sh
-cargo build
-cargo build --release
+cargo install --path .
 ```
 
 ## Usage
 
 ```sh
-nuke-my-sessions
-nuke-my-sessions select
-nuke-my-sessions list
-nuke-my-sessions list --tool codex
-nuke-my-sessions nuke --tool droid --all
-nuke-my-sessions nuke --tool codex --all --yes
+nuke-my-sessions              # interactive picker (default)
+nuke-my-sessions list         # print sessions grouped by project
+nuke-my-sessions nuke --all   # delete all sessions for a tool
 ```
 
-`select` is default. It opens an interactive picker for one tool.
+### Commands
 
-`nuke` only works with `--all`. If stdin/stdout is not a terminal, `nuke --all` also requires `--tool`.
+| Command | Description |
+|---------|-------------|
+| `select` | Interactive picker to choose sessions for deletion (default) |
+| `list` | Print sessions grouped by project |
+| `nuke --all` | Delete all sessions for a tool |
 
-## Tools
+### Options
 
-| Tool | `--tool` value | Default root | Env override |
-|------|----------------|--------------|--------------|
-| Claude Code | `claude-code` | `~/.claude/projects` | `NUKE_MY_SESSIONS_CLAUDE_ROOT` |
-| Codex | `codex` | `~/.codex/sessions` | `NUKE_MY_SESSIONS_CODEX_ROOT` |
-| Droid | `droid` | `~/.factory/sessions` | `NUKE_MY_SESSIONS_DROID_ROOT` |
+```
+--tool <tool>    Target tool: claude-code, codex, droid
+--yes, -y        Skip confirmation prompt
+```
 
-## Behavior
+`nuke --all` requires `--tool` when stdin/stdout is not a terminal.
 
-* `list` prints sessions grouped by project.
-* `select` lets you choose sessions to delete interactively.
-* `nuke --all` deletes every session for one tool, with confirmation unless `--yes` is set.
-* Droid deletion removes both the `.jsonl` session file and matching `.settings.json` file.
+## Session paths
+
+| Tool | Default path | Env override |
+|------|--------------|--------------|
+| Claude Code | `~/.claude/projects` | `NUKE_MY_SESSIONS_CLAUDE_ROOT` |
+| Codex | `~/.codex/sessions` | `NUKE_MY_SESSIONS_CODEX_ROOT` |
+| Droid | `~/.factory/sessions` | `NUKE_MY_SESSIONS_DROID_ROOT` |
+
+## Development
+
+```sh
+cargo fmt && cargo test && cargo clippy
+```
 
 ## License
 
