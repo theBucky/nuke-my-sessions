@@ -1,5 +1,5 @@
 use crate::DeleteOutcome;
-use crate::model::session::{SessionEntry, Tool, for_each_project_group};
+use crate::model::session::{SessionEntry, Tool, project_groups};
 
 pub fn print_tool_header(tool: Tool) {
     println!("{tool}:");
@@ -11,12 +11,12 @@ pub fn print_sessions(sessions: &[SessionEntry]) {
         return;
     }
 
-    for_each_project_group(sessions, |project, sessions| {
-        println!("  [{project}]");
-        for session in sessions {
+    for group in project_groups(sessions) {
+        println!("  [{}]", group.project);
+        for session in group.sessions {
             println!("    {}", session.display_line());
         }
-    });
+    }
 }
 
 pub fn print_delete_outcome(tool: Tool, outcome: DeleteOutcome) {

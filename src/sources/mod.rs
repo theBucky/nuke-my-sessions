@@ -108,18 +108,17 @@ pub(crate) fn delete_entries_within_root_using(
 
     let root = fs::canonicalize(root)
         .with_context(|| format!("failed to resolve root {}", root.display()))?;
-    let mut deleted = 0;
-    let mut failed = Vec::new();
-
-    for session in sessions {
-        match delete_session(&root, session) {
-            Ok(()) => deleted += 1,
-            Err(error) => failed.push(DeleteFailure {
+    let outcomes = sessions
+        .iter()
+        .map(|session| {
+            delete_session(&root, session).map_err(|error| DeleteFailure {
                 path: session.path.clone(),
                 error: format!("{error:#}"),
-            }),
-        }
-    }
+            })
+        })
+        .collect::<Vec<_>>();
+    let deleted = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
+    let failed = outcomes.into_iter().filter_map(Result::err).collect();
 
     Ok(DeleteSummary { deleted, failed })
 }
@@ -147,9 +146,7 @@ pub(crate) fn delete_entry(root: &Path, path: &Path) -> Result<()> {
 }
 
 pub fn collect_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    collect_jsonl_files_inner(root, &mut files)?;
-    Ok(files)
+    collect_matching_paths(root, is_jsonl_file)
 }
 
 pub(crate) fn first_jsonl_record<T, U>(
@@ -159,29 +156,24 @@ pub(crate) fn first_jsonl_record<T, U>(
 where
     T: DeserializeOwned,
 {
-    let mut mapped = None;
-    for_each_jsonl_record(path, |record| {
-        mapped = map_record(record);
-        if mapped.is_some() {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
-    })?;
-
-    Ok(mapped)
+    fold_jsonl_records(path, None, |_, record| match map_record(record) {
+        Some(mapped) => ControlFlow::Break(Some(mapped)),
+        None => ControlFlow::Continue(None),
+    })
 }
 
-pub(crate) fn for_each_jsonl_record<T>(
+pub(crate) fn fold_jsonl_records<T, U>(
     path: &Path,
-    mut visit: impl FnMut(T) -> ControlFlow<()>,
-) -> Result<()>
+    initial: U,
+    mut fold: impl FnMut(U, T) -> ControlFlow<U, U>,
+) -> Result<U>
 where
     T: DeserializeOwned,
 {
     let file =
         fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
+    let mut state = initial;
 
     for line in reader.lines() {
         let line = line?;
@@ -190,12 +182,13 @@ where
             Err(_) => continue,
         };
 
-        if matches!(visit(record), ControlFlow::Break(_)) {
-            break;
-        }
+        state = match fold(state, record) {
+            ControlFlow::Continue(state) => state,
+            ControlFlow::Break(state) => return Ok(state),
+        };
     }
 
-    Ok(())
+    Ok(state)
 }
 
 pub(crate) fn configured_root(root_env: &str, default_segments: &[&str]) -> Result<PathBuf> {
@@ -238,26 +231,37 @@ pub(crate) fn is_jsonl_file(path: &Path) -> bool {
     path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
 }
 
-fn collect_jsonl_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+pub(crate) fn path_metadata(path: &Path) -> Result<fs::Metadata> {
+    fs::metadata(path).with_context(|| format!("failed to inspect {}", path.display()))
+}
+
+pub(crate) fn read_directory_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    fs::read_dir(path)
+        .with_context(|| format!("failed to read {}", path.display()))?
+        .map(|entry| entry.map(|entry| entry.path()).map_err(Into::into))
+        .collect()
+}
+
+fn collect_matching_paths(
+    root: &Path,
+    include_path: impl Fn(&Path) -> bool + Copy,
+) -> Result<Vec<PathBuf>> {
     if !root.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    for entry in fs::read_dir(root).with_context(|| format!("failed to read {}", root.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            collect_jsonl_files_inner(&path, files)?;
-            continue;
-        }
+    fs::read_dir(root)
+        .with_context(|| format!("failed to read {}", root.display()))?
+        .try_fold(Vec::new(), |mut paths, entry| {
+            let path = entry?.path();
+            if path_metadata(&path)?.is_dir() {
+                paths.extend(collect_matching_paths(&path, include_path)?);
+            } else if include_path(&path) {
+                paths.push(path);
+            }
 
-        if is_jsonl_file(&path) {
-            files.push(path);
-        }
-    }
-
-    Ok(())
+            Ok(paths)
+        })
 }
 
 fn default_root(path_segments: &[&str]) -> Result<PathBuf> {

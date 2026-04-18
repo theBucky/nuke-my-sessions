@@ -53,21 +53,71 @@ impl SessionEntry {
     }
 }
 
+pub(crate) struct ProjectGroup<'a> {
+    pub project: &'a str,
+    pub sessions: &'a [SessionEntry],
+}
+
 // Sessions must already be sorted so equal project names stay contiguous.
-pub(crate) fn for_each_project_group(
+pub(crate) fn project_groups(
     sessions: &[SessionEntry],
-    mut visit: impl FnMut(&str, &[SessionEntry]),
-) {
-    let mut start = 0;
-    while start < sessions.len() {
-        let project = sessions[start].project_name();
-        let mut end = start + 1;
+) -> impl Iterator<Item = ProjectGroup<'_>> + '_ {
+    sessions
+        .chunk_by(|left, right| left.project_name() == right.project_name())
+        .map(|sessions| ProjectGroup {
+            project: sessions[0].project_name(),
+            sessions,
+        })
+}
 
-        while end < sessions.len() && sessions[end].project_name() == project {
-            end += 1;
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{SessionEntry, Tool, project_groups};
+
+    #[test]
+    fn groups_adjacent_sessions_by_project() {
+        let sessions = vec![
+            session("a-1", Some("a")),
+            session("a-2", Some("a")),
+            session("b-1", Some("b")),
+            session("c-1", None),
+        ];
+
+        let groups = project_groups(&sessions)
+            .map(|group| {
+                (
+                    group.project.to_owned(),
+                    group
+                        .sessions
+                        .iter()
+                        .map(|session| session.id.clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            groups,
+            vec![
+                (
+                    String::from("a"),
+                    vec![String::from("a-1"), String::from("a-2")]
+                ),
+                (String::from("b"), vec![String::from("b-1")]),
+                (String::from("no project"), vec![String::from("c-1")]),
+            ]
+        );
+    }
+
+    fn session(id: &str, project: Option<&str>) -> SessionEntry {
+        SessionEntry {
+            tool: Tool::Codex,
+            id: id.to_owned(),
+            project: project.map(str::to_owned),
+            path: PathBuf::from(format!("{id}.jsonl")),
+            updated_at: None,
         }
-
-        visit(project, &sessions[start..end]);
-        start = end;
     }
 }

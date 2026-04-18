@@ -9,7 +9,7 @@ use super::{
     SessionBrowser, SessionCountState, ToolState,
 };
 use crate::DeleteOutcome;
-use crate::model::session::{SessionEntry, Tool, for_each_project_group};
+use crate::model::session::{SessionEntry, Tool, project_groups};
 use crate::sources::SourceRegistry;
 
 impl<'a> SessionBrowser<'a> {
@@ -250,9 +250,19 @@ impl ToolState {
     }
 
     fn loaded(tool: Tool, sessions: Vec<SessionEntry>) -> Self {
-        let mut state = Self::unloaded(tool);
-        state.set_sessions_ready(sessions);
-        state
+        let row_cache = RowCache::build(&sessions);
+
+        Self {
+            tool,
+            session_count: SessionCountState::Known(sessions.len()),
+            cursor_row: row_cache.session_rows.first().copied().unwrap_or(0),
+            rows: row_cache.rows,
+            session_rows: row_cache.session_rows,
+            sessions,
+            selected: BTreeSet::default(),
+            cursor: 0,
+            load_state: LoadState::Ready,
+        }
     }
 
     fn load(&mut self, registry: &SourceRegistry) -> Result<()> {
@@ -332,28 +342,17 @@ impl ToolState {
         }
     }
 
-    fn apply_row_cache(&mut self) {
-        let row_cache = RowCache::build(&self.sessions);
-        self.rows = row_cache.rows;
-        self.session_rows = row_cache.session_rows;
-        self.set_cursor(self.cursor);
-    }
-
-    fn retain_existing_selection(&mut self) {
-        let current_paths: BTreeSet<PathBuf> = self
-            .sessions
-            .iter()
-            .map(|session| session.path.clone())
-            .collect();
-        self.selected.retain(|path| current_paths.contains(path));
-    }
-
     fn set_sessions_ready(&mut self, sessions: Vec<SessionEntry>) {
+        let row_cache = RowCache::build(&sessions);
+        let selected = selected_paths_for_sessions(&self.selected, &sessions);
+
         self.session_count = SessionCountState::Known(sessions.len());
         self.sessions = sessions;
-        self.apply_row_cache();
-        self.retain_existing_selection();
+        self.rows = row_cache.rows;
+        self.session_rows = row_cache.session_rows;
+        self.selected = selected;
         self.load_state = LoadState::Ready;
+        self.set_cursor(self.cursor);
     }
 
     fn set_session_count(&mut self, count: usize) {
@@ -415,21 +414,22 @@ impl ToolState {
 
 impl RowCache {
     fn build(sessions: &[SessionEntry]) -> Self {
-        let mut rows = Vec::new();
+        let mut rows = Vec::with_capacity(sessions.len().saturating_mul(2));
         let mut session_rows = Vec::with_capacity(sessions.len());
         let mut session_index = 0;
 
-        for_each_project_group(sessions, |project, project_sessions| {
-            rows.push(super::DisplayRow::Header(format!("  [{project}]")));
-            for session in project_sessions {
+        for group in project_groups(sessions) {
+            rows.push(super::DisplayRow::Header(format!("  [{}]", group.project)));
+
+            for session in group.sessions {
                 rows.push(super::DisplayRow::Session {
                     session_index,
                     text: session.display_line().to_owned(),
                 });
-                session_rows.push(rows.len().saturating_sub(1));
+                session_rows.push(rows.len() - 1);
                 session_index += 1;
             }
-        });
+        }
 
         Self { rows, session_rows }
     }
@@ -450,6 +450,15 @@ fn reload_deleted_sessions(
             format!("deleted {deleted} session(s), failed to refresh")
         }
     }
+}
+
+fn selected_paths_for_sessions(
+    selected: &BTreeSet<PathBuf>,
+    sessions: &[SessionEntry],
+) -> BTreeSet<PathBuf> {
+    super::super::selected_sessions(sessions, selected)
+        .map(|session| session.path.clone())
+        .collect()
 }
 
 fn is_ctrl_c(key: KeyEvent) -> bool {
@@ -544,6 +553,22 @@ mod tests {
         tool_state.toggle_all_selected();
 
         assert!(tool_state.selected.is_empty());
+    }
+
+    #[test]
+    fn retains_only_selection_for_reloaded_sessions() {
+        let mut tool_state = ToolState::loaded(
+            Tool::Codex,
+            vec![session_in("a-1", "a"), session_in("b-1", "b")],
+        );
+        let retained = PathBuf::from("b/b-1.jsonl");
+        tool_state.selected = [PathBuf::from("a/a-1.jsonl"), retained.clone()]
+            .into_iter()
+            .collect();
+
+        tool_state.set_sessions_ready(vec![session_in("b-1", "b"), session_in("c-1", "c")]);
+
+        assert_eq!(tool_state.selected, [retained].into_iter().collect());
     }
 
     fn session(id: &str, path: PathBuf) -> SessionEntry {

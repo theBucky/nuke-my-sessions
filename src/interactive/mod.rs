@@ -17,6 +17,15 @@ pub(crate) struct ToolSessions {
     pub sessions: Vec<SessionEntry>,
 }
 
+pub(crate) fn selected_sessions<'a>(
+    sessions: &'a [SessionEntry],
+    selected_paths: &'a BTreeSet<PathBuf>,
+) -> impl Iterator<Item = &'a SessionEntry> {
+    sessions
+        .iter()
+        .filter(|session| selected_paths.contains(&session.path))
+}
+
 #[derive(Default)]
 pub struct Prompter {
     theme: ColorfulTheme,
@@ -54,9 +63,7 @@ pub(crate) fn delete_selected_sessions(
         return Ok(DeleteOutcome::NoSessionsFound);
     }
 
-    let selected = sessions
-        .iter()
-        .filter(|session| selected_paths.contains(&session.path))
+    let selected = selected_sessions(sessions, selected_paths)
         .cloned()
         .collect::<Vec<_>>();
     if selected.is_empty() {
