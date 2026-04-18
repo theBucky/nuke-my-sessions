@@ -142,8 +142,9 @@ impl<'a> SessionBrowser<'a> {
 
         match outcome {
             DeleteOutcome::Deleted(deleted) => {
-                self.reload_current_tool()?;
-                self.status = Some(format!("deleted {deleted} session(s)"));
+                let sessions = self.registry.source(tool).list_sessions();
+                let status = reload_deleted_sessions(self.current_tool_mut(), deleted, sessions);
+                self.status = Some(status);
                 Ok(AppEvent::Continue)
             }
             DeleteOutcome::NoSessionsFound => {
@@ -195,13 +196,6 @@ impl<'a> SessionBrowser<'a> {
     fn load_active_tool(&mut self) -> Result<()> {
         self.tools[self.active_tool].load(self.registry)
     }
-
-    fn reload_current_tool(&mut self) -> Result<()> {
-        let tool = self.current_tool().tool;
-        let sessions = self.registry.source(tool).list_sessions()?;
-        self.current_tool_mut().set_sessions_ready(sessions);
-        Ok(())
-    }
 }
 
 impl Focus {
@@ -244,8 +238,7 @@ impl ToolState {
                 Ok(())
             }
             Err(error) => {
-                self.reset();
-                self.load_state = LoadState::Failed(error.to_string());
+                self.set_load_failed(error.to_string());
                 Err(error)
             }
         }
@@ -303,6 +296,11 @@ impl ToolState {
         self.load_state = LoadState::Ready;
     }
 
+    fn set_load_failed(&mut self, error: impl Into<String>) {
+        self.reset();
+        self.load_state = LoadState::Failed(error.into());
+    }
+
     fn reset(&mut self) {
         self.sessions.clear();
         self.rows.clear();
@@ -335,6 +333,23 @@ impl RowCache {
     }
 }
 
+fn reload_deleted_sessions(
+    tool_state: &mut ToolState,
+    deleted: usize,
+    sessions: Result<Vec<SessionEntry>>,
+) -> String {
+    match sessions {
+        Ok(sessions) => {
+            tool_state.set_sessions_ready(sessions);
+            format!("deleted {deleted} session(s)")
+        }
+        Err(error) => {
+            tool_state.set_load_failed(error.to_string());
+            format!("deleted {deleted} session(s), failed to refresh")
+        }
+    }
+}
+
 fn is_ctrl_c(key: KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
 }
@@ -347,4 +362,47 @@ fn offset_index(current: usize, offset: isize, len: usize) -> usize {
     current
         .saturating_add_signed(offset)
         .min(len.saturating_sub(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use anyhow::anyhow;
+
+    use super::{LoadState, ToolState, reload_deleted_sessions};
+    use crate::model::session::{SessionEntry, Tool};
+
+    #[test]
+    fn keeps_delete_success_when_reload_fails() {
+        let deleted_path = PathBuf::from("/tmp/deleted.jsonl");
+        let retained_path = PathBuf::from("/tmp/retained.jsonl");
+        let mut tool_state = ToolState::loaded(
+            Tool::Codex,
+            vec![
+                session("deleted", deleted_path.clone()),
+                session("retained", retained_path),
+            ],
+        );
+        tool_state.selected.insert(deleted_path);
+        let status = reload_deleted_sessions(&mut tool_state, 1, Err(anyhow!("boom")));
+
+        assert_eq!(status, "deleted 1 session(s), failed to refresh");
+        assert!(tool_state.sessions.is_empty());
+        assert!(tool_state.selected.is_empty());
+        assert!(matches!(
+            tool_state.load_state,
+            LoadState::Failed(ref error) if error == "boom"
+        ));
+    }
+
+    fn session(id: &str, path: PathBuf) -> SessionEntry {
+        SessionEntry {
+            tool: Tool::Codex,
+            id: id.to_owned(),
+            project: Some(String::from("project")),
+            path,
+            updated_at: None,
+        }
+    }
 }
