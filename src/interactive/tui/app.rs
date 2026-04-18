@@ -17,7 +17,7 @@ impl<'a> SessionBrowser<'a> {
         registry: &'a SourceRegistry,
         tool_sessions: Option<super::super::ToolSessions>,
         skip_confirmation: bool,
-    ) -> Result<Self> {
+    ) -> Self {
         let is_scoped = tool_sessions.is_some();
         let tools = match tool_sessions {
             Some(super::super::ToolSessions { tool, sessions }) => {
@@ -36,21 +36,18 @@ impl<'a> SessionBrowser<'a> {
             },
             pending_delete: false,
             skip_confirmation,
-            session_page_size: 1,
             status: None,
         };
 
-        match app.load_active_tool() {
-            Ok(()) => app.sync_status_with_active_tool(),
-            Err(error) => {
-                if is_scoped {
-                    return Err(error);
-                }
-                app.status = Some(format!("{}: {error}", app.current_tool().tool));
+        if !is_scoped {
+            app.load_tool_counts();
+            match app.load_active_tool() {
+                Ok(()) => {}
+                Err(error) => app.status = Some(format!("{}: {error}", app.current_tool().tool)),
             }
         }
-
-        Ok(app)
+        app.sync_status_with_active_tool();
+        app
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Result<AppEvent> {
@@ -63,8 +60,9 @@ impl<'a> SessionBrowser<'a> {
             KeyCode::Tab => self.toggle_focus(),
             KeyCode::Up => self.move_focus_cursor(-1),
             KeyCode::Down => self.move_focus_cursor(1),
-            KeyCode::Char('j') => self.move_session_page(1),
-            KeyCode::Char('k') => self.move_session_page(-1),
+            KeyCode::Char('j') => self.move_project_cursor(1),
+            KeyCode::Char('k') => self.move_project_cursor(-1),
+            KeyCode::Char('a') => self.toggle_all_current_tool(),
             KeyCode::Char(' ') => self.toggle_current_session(),
             KeyCode::Enter => return self.handle_enter(),
             _ => {}
@@ -92,14 +90,23 @@ impl<'a> SessionBrowser<'a> {
         }
     }
 
-    fn move_session_page(&mut self, page_direction: isize) {
+    fn move_project_cursor(&mut self, direction: isize) {
         if self.focus != Focus::Sessions {
             return;
         }
 
         self.clear_pending_delete();
-        let offset = isize::from(self.session_page_size) * page_direction;
-        self.current_tool_mut().move_cursor(offset);
+        self.current_tool_mut().move_project(direction);
+    }
+
+    fn toggle_all_current_tool(&mut self) {
+        if self.focus != Focus::Sessions || self.current_tool().sessions.is_empty() {
+            return;
+        }
+
+        self.clear_pending_delete();
+        self.current_tool_mut().toggle_all_selected();
+        self.status = None;
     }
 
     fn toggle_current_session(&mut self) {
@@ -167,18 +174,22 @@ impl<'a> SessionBrowser<'a> {
         self.active_tool = next;
         match self.load_active_tool() {
             Ok(()) => self.sync_status_with_active_tool(),
-            Err(error) => {
-                self.status = Some(format!("{}: {error}", self.current_tool().tool));
-            }
+            Err(error) => self.status = Some(format!("{}: {error}", self.current_tool().tool)),
         }
     }
 
     fn sync_status_with_active_tool(&mut self) {
-        self.status = self
-            .current_tool()
-            .sessions
-            .is_empty()
-            .then_some(String::from(NO_SESSIONS_STATUS));
+        let status = {
+            let tool_state = self.current_tool();
+            match &tool_state.load_state {
+                LoadState::Failed(error) => Some(format!("{}: {error}", tool_state.tool)),
+                LoadState::Ready if tool_state.sessions.is_empty() => {
+                    Some(String::from(NO_SESSIONS_STATUS))
+                }
+                LoadState::Ready | LoadState::Unloaded => None,
+            }
+        };
+        self.status = status;
     }
 
     fn clear_pending_delete(&mut self) {
@@ -195,6 +206,15 @@ impl<'a> SessionBrowser<'a> {
 
     fn load_active_tool(&mut self) -> Result<()> {
         self.tools[self.active_tool].load(self.registry)
+    }
+
+    fn load_tool_counts(&mut self) {
+        for tool_state in &mut self.tools {
+            match self.registry.source(tool_state.tool).count_sessions() {
+                Ok(count) => tool_state.set_session_count(count),
+                Err(_) => tool_state.set_count_failed(),
+            }
+        }
     }
 }
 
@@ -214,9 +234,11 @@ impl ToolState {
             sessions: Vec::new(),
             rows: Vec::new(),
             session_rows: Vec::new(),
-            selected: Default::default(),
+            selected: BTreeSet::default(),
             cursor: 0,
             cursor_row: 0,
+            session_count: None,
+            count_failed: false,
             load_state: LoadState::Unloaded,
         }
     }
@@ -246,12 +268,23 @@ impl ToolState {
 
     fn move_cursor(&mut self, direction: isize) {
         if self.sessions.is_empty() {
-            self.cursor = 0;
+            self.set_cursor(0);
             return;
         }
 
-        self.cursor = offset_index(self.cursor, direction, self.sessions.len());
-        self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
+        self.set_cursor(offset_index(self.cursor, direction, self.sessions.len()));
+    }
+
+    fn move_project(&mut self, direction: isize) {
+        let next = match direction.cmp(&0) {
+            std::cmp::Ordering::Greater => self.project_start_after(self.cursor),
+            std::cmp::Ordering::Less => self.project_start_before(self.cursor),
+            std::cmp::Ordering::Equal => None,
+        };
+
+        if let Some(cursor) = next {
+            self.set_cursor(cursor);
+        }
     }
 
     fn toggle_selected(&mut self) {
@@ -264,20 +297,37 @@ impl ToolState {
         }
     }
 
-    pub(super) fn session_badge(&self) -> String {
-        match &self.load_state {
-            LoadState::Failed(_) => String::from("!"),
-            LoadState::Ready => self.sessions.len().to_string(),
-            LoadState::Unloaded => String::from("-"),
+    fn toggle_all_selected(&mut self) {
+        if self
+            .sessions
+            .iter()
+            .all(|session| self.selected.contains(&session.path))
+        {
+            self.selected.clear();
+            return;
         }
+
+        self.selected = self
+            .sessions
+            .iter()
+            .map(|session| session.path.clone())
+            .collect();
+    }
+
+    pub(super) fn session_badge(&self) -> String {
+        if matches!(self.load_state, LoadState::Failed(_)) || self.count_failed {
+            return String::from("!");
+        }
+
+        self.session_count
+            .map_or_else(|| String::from("-"), |count| count.to_string())
     }
 
     fn apply_row_cache(&mut self) {
         let row_cache = RowCache::build(&self.sessions);
         self.rows = row_cache.rows;
         self.session_rows = row_cache.session_rows;
-        self.cursor = self.cursor.min(self.sessions.len().saturating_sub(1));
-        self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
+        self.set_cursor(self.cursor);
     }
 
     fn retain_existing_selection(&mut self) {
@@ -290,15 +340,61 @@ impl ToolState {
     }
 
     fn set_sessions_ready(&mut self, sessions: Vec<SessionEntry>) {
+        self.session_count = Some(sessions.len());
+        self.count_failed = false;
         self.sessions = sessions;
         self.apply_row_cache();
         self.retain_existing_selection();
         self.load_state = LoadState::Ready;
     }
 
+    fn set_session_count(&mut self, count: usize) {
+        self.session_count = Some(count);
+        self.count_failed = false;
+    }
+
+    fn set_count_failed(&mut self) {
+        self.session_count = None;
+        self.count_failed = true;
+    }
+
     fn set_load_failed(&mut self, error: impl Into<String>) {
         self.reset();
         self.load_state = LoadState::Failed(error.into());
+    }
+
+    fn set_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.sessions.len().saturating_sub(1));
+        self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
+    }
+
+    fn project_start_after(&self, current: usize) -> Option<usize> {
+        let current_project = self.sessions.get(current)?.project_name();
+        self.sessions
+            .iter()
+            .enumerate()
+            .skip(current + 1)
+            .find(|(_, session)| session.project_name() != current_project)
+            .map(|(index, _)| index)
+    }
+
+    fn project_start_before(&self, current: usize) -> Option<usize> {
+        let current_project = self.sessions.get(current)?.project_name();
+        let current_start = self.sessions[..=current]
+            .iter()
+            .rposition(|session| session.project_name() != current_project)
+            .map_or(0, |index| index + 1);
+        if current_start == 0 {
+            return None;
+        }
+
+        let previous_project = self.sessions[current_start - 1].project_name();
+        Some(
+            self.sessions[..current_start]
+                .iter()
+                .rposition(|session| session.project_name() != previous_project)
+                .map_or(0, |index| index + 1),
+        )
     }
 
     fn reset(&mut self) {
@@ -396,12 +492,70 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn jumps_between_project_starts() {
+        let mut tool_state = ToolState::loaded(
+            Tool::Codex,
+            vec![
+                session_in("a-1", "a"),
+                session_in("a-2", "a"),
+                session_in("b-1", "b"),
+                session_in("b-2", "b"),
+                session_in("c-1", "c"),
+            ],
+        );
+
+        tool_state.move_cursor(1);
+        tool_state.move_project(1);
+        assert_eq!(tool_state.cursor, 2);
+
+        tool_state.move_project(1);
+        assert_eq!(tool_state.cursor, 4);
+
+        tool_state.move_project(1);
+        assert_eq!(tool_state.cursor, 4);
+
+        tool_state.move_project(-1);
+        assert_eq!(tool_state.cursor, 2);
+
+        tool_state.move_project(-1);
+        assert_eq!(tool_state.cursor, 0);
+    }
+
+    #[test]
+    fn toggles_all_sessions() {
+        let mut tool_state = ToolState::loaded(
+            Tool::Codex,
+            vec![session_in("a-1", "a"), session_in("b-1", "b")],
+        );
+
+        tool_state.toggle_all_selected();
+
+        assert_eq!(tool_state.selected.len(), 2);
+        assert!(tool_state.selected.contains(&PathBuf::from("a/a-1.jsonl")));
+        assert!(tool_state.selected.contains(&PathBuf::from("b/b-1.jsonl")));
+
+        tool_state.toggle_all_selected();
+
+        assert!(tool_state.selected.is_empty());
+    }
+
     fn session(id: &str, path: PathBuf) -> SessionEntry {
         SessionEntry {
             tool: Tool::Codex,
             id: id.to_owned(),
             project: Some(String::from("project")),
             path,
+            updated_at: None,
+        }
+    }
+
+    fn session_in(id: &str, project: &str) -> SessionEntry {
+        SessionEntry {
+            tool: Tool::Codex,
+            id: id.to_owned(),
+            project: Some(project.to_owned()),
+            path: PathBuf::from(project).join(format!("{id}.jsonl")),
             updated_at: None,
         }
     }

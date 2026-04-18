@@ -24,7 +24,7 @@ pub fn run_session_browser(
     tool_sessions: Option<super::ToolSessions>,
     skip_confirmation: bool,
 ) -> Result<()> {
-    let mut browser = SessionBrowser::new(registry, tool_sessions, skip_confirmation)?;
+    let mut browser = SessionBrowser::new(registry, tool_sessions, skip_confirmation);
     let mut terminal = TerminalGuard::new()?;
 
     loop {
@@ -51,7 +51,6 @@ struct SessionBrowser<'a> {
     focus: Focus,
     pending_delete: bool,
     skip_confirmation: bool,
-    session_page_size: i16,
     status: Option<String>,
 }
 
@@ -74,6 +73,8 @@ struct ToolState {
     selected: BTreeSet<PathBuf>,
     cursor: usize,
     cursor_row: usize,
+    session_count: Option<usize>,
+    count_failed: bool,
     load_state: LoadState,
 }
 

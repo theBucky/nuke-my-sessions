@@ -65,6 +65,10 @@ impl DroidSource {
 }
 
 impl SessionSource for DroidSource {
+    fn count_sessions(&self) -> Result<usize> {
+        collect_jsonl_files(&self.root).map(|paths| paths.len())
+    }
+
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = collect_jsonl_files(&self.root)?
             .into_iter()

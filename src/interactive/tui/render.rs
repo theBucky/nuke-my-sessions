@@ -24,9 +24,6 @@ impl SessionBrowser<'_> {
             .constraints([Constraint::Length(TOOLS_PANEL_WIDTH), Constraint::Min(1)])
             .areas(body);
 
-        self.session_page_size =
-            i16::try_from(titled_block("sessions").inner(sessions).height.max(1))
-                .unwrap_or(i16::MAX);
         self.render_tools(frame, tools);
         self.render_sessions(frame, sessions);
         self.render_footer(frame, footer);
@@ -100,7 +97,9 @@ impl SessionBrowser<'_> {
             hotkey("space"),
             plain(": toggle  "),
             hotkey("j/k"),
-            plain(": page  "),
+            plain(": project  "),
+            hotkey("a"),
+            plain(": all/none  "),
             hotkey("enter"),
             plain(": submit  "),
             hotkey("ctrl+c"),

@@ -28,7 +28,7 @@ impl ClaudeCodeSource {
         Self { root }
     }
 
-    fn read_session(metadata_paths: Vec<PathBuf>, session_path: PathBuf) -> Result<SessionEntry> {
+    fn read_session(metadata_paths: &[PathBuf], session_path: PathBuf) -> Result<SessionEntry> {
         if metadata_paths.is_empty() {
             bail!("no metadata files found for {}", session_path.display());
         }
@@ -39,7 +39,7 @@ impl ClaudeCodeSource {
             latest_system_time(latest, session_updated_at(metadata_path))
         });
 
-        for metadata_path in &metadata_paths {
+        for metadata_path in metadata_paths {
             let file = fs::File::open(metadata_path)
                 .with_context(|| format!("failed to open {}", metadata_path.display()))?;
             let reader = BufReader::new(file);
@@ -81,6 +81,26 @@ impl ClaudeCodeSource {
         })
     }
 
+    fn collect_session_count(&self) -> Result<usize> {
+        if !self.root.exists() {
+            return Ok(0);
+        }
+
+        let mut count = 0;
+        for path in immediate_children(&self.root)? {
+            if Self::is_session_entry(&path)? {
+                count += 1;
+                continue;
+            }
+
+            if path.is_dir() {
+                count += Self::count_project_sessions(&path)?;
+            }
+        }
+
+        Ok(count)
+    }
+
     fn collect_sessions(&self) -> Result<Vec<SessionEntry>> {
         if !self.root.exists() {
             return Ok(Vec::new());
@@ -101,6 +121,17 @@ impl ClaudeCodeSource {
         Ok(sessions)
     }
 
+    fn count_project_sessions(project_root: &Path) -> Result<usize> {
+        let mut count = 0;
+        for path in immediate_children(project_root)? {
+            if Self::is_session_entry(&path)? {
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
     fn collect_project_sessions(
         project_root: &Path,
         sessions: &mut Vec<SessionEntry>,
@@ -114,13 +145,26 @@ impl ClaudeCodeSource {
         Ok(())
     }
 
+    fn is_session_entry(path: &Path) -> Result<bool> {
+        if path.is_file() {
+            return Ok(is_jsonl(path));
+        }
+
+        if path.is_dir() {
+            return session_dir_has_metadata(path);
+        }
+
+        Ok(false)
+    }
+
     fn entry_session(path: &Path) -> Result<Option<SessionEntry>> {
         if path.is_file() {
             if !is_jsonl(path) {
                 return Ok(None);
             }
 
-            return Self::read_session(vec![path.to_path_buf()], path.to_path_buf()).map(Some);
+            let metadata_paths = [path.to_path_buf()];
+            return Self::read_session(&metadata_paths, path.to_path_buf()).map(Some);
         }
 
         if path.is_dir() {
@@ -136,11 +180,15 @@ impl ClaudeCodeSource {
             return Ok(None);
         }
 
-        Self::read_session(metadata_paths, path.to_path_buf()).map(Some)
+        Self::read_session(&metadata_paths, path.to_path_buf()).map(Some)
     }
 }
 
 impl SessionSource for ClaudeCodeSource {
+    fn count_sessions(&self) -> Result<usize> {
+        self.collect_session_count()
+    }
+
     fn list_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = self.collect_sessions()?;
 
@@ -172,6 +220,25 @@ struct ClaudeRecord {
 
 fn is_jsonl(path: &Path) -> bool {
     path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+}
+
+fn session_dir_has_metadata(path: &Path) -> Result<bool> {
+    let subagents = path.join("subagents");
+    if !subagents.is_dir() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(&subagents)
+        .with_context(|| format!("failed to read {}", subagents.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.metadata()?.is_file() && is_jsonl(&path) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn session_dir_metadata_paths(path: &Path) -> Result<Vec<PathBuf>> {

@@ -17,6 +17,10 @@ pub use codex::CodexSource;
 pub use droid::DroidSource;
 
 pub trait SessionSource {
+    fn count_sessions(&self) -> Result<usize> {
+        self.list_sessions().map(|sessions| sessions.len())
+    }
+
     fn list_sessions(&self) -> Result<Vec<SessionEntry>>;
     fn delete_sessions(&self, sessions: &[SessionEntry]) -> Result<DeleteSummary>;
 }
