@@ -4,6 +4,27 @@ Delete local session history for Claude Code, Codex, and Droid.
 
 ## Installation
 
+Download the prebuilt binary for your platform from the [latest release](https://github.com/theBucky/nuke-my-sessions/releases/tag/latest):
+
+```sh
+# macOS (Apple Silicon)
+curl -L -o nuke-my-sessions https://github.com/theBucky/nuke-my-sessions/releases/download/latest/nuke-my-sessions-macos-arm64
+
+# Linux (x86_64)
+curl -L -o nuke-my-sessions https://github.com/theBucky/nuke-my-sessions/releases/download/latest/nuke-my-sessions-linux-amd64
+
+chmod +x nuke-my-sessions
+mv nuke-my-sessions /usr/local/bin/
+```
+
+On macOS, the binary is unsigned, so Gatekeeper will quarantine it on first run. Clear the attribute once after download:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/nuke-my-sessions
+```
+
+Or build from source:
+
 ```sh
 cargo install --path .
 ```
