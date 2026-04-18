@@ -40,9 +40,8 @@ impl<'a> SessionBrowser<'a> {
         };
 
         if !is_scoped {
-            match app.load_active_tool() {
-                Ok(()) => {}
-                Err(error) => app.status = Some(format!("{}: {error}", app.current_tool().tool)),
+            if let Err(error) = app.load_active_tool() {
+                app.set_load_failure_status(error.to_string());
             }
             app.load_inactive_tool_counts();
         }
@@ -106,7 +105,7 @@ impl<'a> SessionBrowser<'a> {
 
         self.clear_pending_delete();
         self.current_tool_mut().toggle_all_selected();
-        self.status = None;
+        self.clear_status();
     }
 
     fn toggle_current_session(&mut self) {
@@ -116,7 +115,7 @@ impl<'a> SessionBrowser<'a> {
 
         self.clear_pending_delete();
         self.current_tool_mut().toggle_selected();
-        self.status = None;
+        self.clear_status();
     }
 
     fn toggle_focus(&mut self) {
@@ -127,8 +126,7 @@ impl<'a> SessionBrowser<'a> {
     fn delete_current_selection(&mut self) -> Result<AppEvent> {
         let tool = self.current_tool().tool;
         if self.current_tool().selected.is_empty() {
-            self.clear_pending_delete();
-            self.status = Some(String::from(EMPTY_SELECTION_STATUS));
+            self.set_status(EMPTY_SELECTION_STATUS);
             return Ok(AppEvent::Continue);
         }
 
@@ -147,22 +145,16 @@ impl<'a> SessionBrowser<'a> {
         };
         self.clear_pending_delete();
 
-        match outcome {
+        let status = match outcome {
             DeleteOutcome::Deleted(deleted) => {
                 let sessions = self.registry.source(tool).list_sessions();
-                let status = reload_deleted_sessions(self.current_tool_mut(), deleted, sessions);
-                self.status = Some(status);
-                Ok(AppEvent::Continue)
+                reload_deleted_sessions(self.current_tool_mut(), deleted, sessions)
             }
-            DeleteOutcome::NoSessionsFound => {
-                self.status = Some(String::from(NO_SESSIONS_STATUS));
-                Ok(AppEvent::Continue)
-            }
-            DeleteOutcome::NoSessionsDeleted => {
-                self.status = Some(String::from(EMPTY_SELECTION_STATUS));
-                Ok(AppEvent::Continue)
-            }
-        }
+            DeleteOutcome::NoSessionsFound => String::from(NO_SESSIONS_STATUS),
+            DeleteOutcome::NoSessionsDeleted => String::from(EMPTY_SELECTION_STATUS),
+        };
+        self.set_status(status);
+        Ok(AppEvent::Continue)
     }
 
     fn move_tool_cursor(&mut self, direction: isize) {
@@ -174,7 +166,7 @@ impl<'a> SessionBrowser<'a> {
         self.active_tool = next;
         match self.load_active_tool() {
             Ok(()) => self.sync_status_with_active_tool(),
-            Err(error) => self.status = Some(format!("{}: {error}", self.current_tool().tool)),
+            Err(error) => self.set_load_failure_status(error.to_string()),
         }
     }
 
@@ -196,6 +188,19 @@ impl<'a> SessionBrowser<'a> {
         self.pending_delete = false;
     }
 
+    fn set_status(&mut self, status: impl Into<String>) {
+        self.clear_pending_delete();
+        self.status = Some(status.into());
+    }
+
+    fn clear_status(&mut self) {
+        self.status = None;
+    }
+
+    fn set_load_failure_status(&mut self, error: impl AsRef<str>) {
+        self.status = Some(format!("{}: {}", self.current_tool().tool, error.as_ref()));
+    }
+
     fn current_tool(&self) -> &ToolState {
         &self.tools[self.active_tool]
     }
@@ -210,13 +215,11 @@ impl<'a> SessionBrowser<'a> {
 
     fn load_inactive_tool_counts(&mut self) {
         for (index, tool_state) in self.tools.iter_mut().enumerate() {
-            if index == self.active_tool {
-                continue;
-            }
-
-            match self.registry.source(tool_state.tool).count_sessions() {
-                Ok(count) => tool_state.set_session_count(count),
-                Err(_) => tool_state.set_session_count_failed(),
+            if index != self.active_tool {
+                match self.registry.source(tool_state.tool).count_sessions() {
+                    Ok(count) => tool_state.set_session_count(count),
+                    Err(_) => tool_state.set_session_count_failed(),
+                }
             }
         }
     }
