@@ -23,7 +23,7 @@ pub fn run_session_browser(
     registry: &SourceRegistry,
     tool_sessions: Option<super::ToolSessions>,
     skip_confirmation: bool,
-) -> Result<InteractiveOutcome> {
+) -> Result<()> {
     let mut browser = SessionBrowser::new(registry, tool_sessions, skip_confirmation)?;
     let mut terminal = TerminalGuard::new()?;
 
@@ -39,17 +39,9 @@ pub fn run_session_browser(
 
         match browser.handle_key(key)? {
             AppEvent::Continue => {}
-            AppEvent::Quit => return Ok(InteractiveOutcome::Cancelled),
-            AppEvent::Deleted(tool, deleted) => {
-                return Ok(InteractiveOutcome::Deleted(tool, deleted));
-            }
+            AppEvent::Quit => return Ok(()),
         }
     }
-}
-
-pub(crate) enum InteractiveOutcome {
-    Cancelled,
-    Deleted(Tool, usize),
 }
 
 struct SessionBrowser<'a> {
@@ -72,7 +64,6 @@ enum Focus {
 enum AppEvent {
     Continue,
     Quit,
-    Deleted(Tool, usize),
 }
 
 struct ToolState {

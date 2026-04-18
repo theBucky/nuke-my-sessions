@@ -141,7 +141,11 @@ impl<'a> SessionBrowser<'a> {
         self.clear_pending_delete();
 
         match outcome {
-            DeleteOutcome::Deleted(deleted) => Ok(AppEvent::Deleted(tool, deleted)),
+            DeleteOutcome::Deleted(deleted) => {
+                self.reload_current_tool()?;
+                self.status = Some(format!("deleted {deleted} session(s)"));
+                Ok(AppEvent::Continue)
+            }
             DeleteOutcome::NoSessionsFound => {
                 self.status = Some(String::from(NO_SESSIONS_STATUS));
                 Ok(AppEvent::Continue)
@@ -190,6 +194,13 @@ impl<'a> SessionBrowser<'a> {
 
     fn load_active_tool(&mut self) -> Result<()> {
         self.tools[self.active_tool].load(self.registry)
+    }
+
+    fn reload_current_tool(&mut self) -> Result<()> {
+        let tool = self.current_tool().tool;
+        let sessions = self.registry.source(tool).list_sessions()?;
+        self.current_tool_mut().set_sessions_ready(sessions);
+        Ok(())
     }
 }
 

@@ -10,7 +10,7 @@ use crate::DeleteOutcome;
 use crate::model::session::{SessionEntry, Tool};
 use crate::sources::SessionSource;
 
-pub(crate) use tui::{InteractiveOutcome, run_session_browser};
+pub(crate) use tui::run_session_browser;
 
 pub(crate) struct ToolSessions {
     pub tool: Tool,

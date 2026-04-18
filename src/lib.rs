@@ -8,7 +8,7 @@ use std::io::{IsTerminal, stdin, stdout};
 use anyhow::{Result, bail};
 use clap::Parser;
 
-use crate::interactive::{InteractiveOutcome, Prompter, ToolSessions, run_session_browser};
+use crate::interactive::{Prompter, ToolSessions, run_session_browser};
 use crate::model::session::Tool;
 use crate::sources::SourceRegistry;
 use crate::ui::cli::{Cli, Command};
@@ -72,12 +72,7 @@ fn select_sessions(
         None
     };
 
-    match run_session_browser(registry, tool_sessions, skip_confirmation)? {
-        InteractiveOutcome::Cancelled => {}
-        InteractiveOutcome::Deleted(tool, deleted) => {
-            print_delete_outcome(tool, DeleteOutcome::Deleted(deleted));
-        }
-    }
+    run_session_browser(registry, tool_sessions, skip_confirmation)?;
 
     Ok(())
 }
