@@ -73,8 +73,7 @@ struct ToolState {
     selected: BTreeSet<PathBuf>,
     cursor: usize,
     cursor_row: usize,
-    session_count: Option<usize>,
-    count_failed: bool,
+    session_count: SessionCountState,
     load_state: LoadState,
 }
 
@@ -82,6 +81,13 @@ enum LoadState {
     Unloaded,
     Ready,
     Failed(String),
+}
+
+#[derive(Clone, Copy)]
+enum SessionCountState {
+    Unknown,
+    Known(usize),
+    Failed,
 }
 
 struct RowCache {

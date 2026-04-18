@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{
     AppEvent, EMPTY_SELECTION_STATUS, Focus, LoadState, NO_SESSIONS_STATUS, RowCache,
-    SessionBrowser, ToolState,
+    SessionBrowser, SessionCountState, ToolState,
 };
 use crate::DeleteOutcome;
 use crate::model::session::{SessionEntry, Tool, for_each_project_group};
@@ -40,11 +40,11 @@ impl<'a> SessionBrowser<'a> {
         };
 
         if !is_scoped {
-            app.load_tool_counts();
             match app.load_active_tool() {
                 Ok(()) => {}
                 Err(error) => app.status = Some(format!("{}: {error}", app.current_tool().tool)),
             }
+            app.load_inactive_tool_counts();
         }
         app.sync_status_with_active_tool();
         app
@@ -208,11 +208,15 @@ impl<'a> SessionBrowser<'a> {
         self.tools[self.active_tool].load(self.registry)
     }
 
-    fn load_tool_counts(&mut self) {
-        for tool_state in &mut self.tools {
+    fn load_inactive_tool_counts(&mut self) {
+        for (index, tool_state) in self.tools.iter_mut().enumerate() {
+            if index == self.active_tool {
+                continue;
+            }
+
             match self.registry.source(tool_state.tool).count_sessions() {
                 Ok(count) => tool_state.set_session_count(count),
-                Err(_) => tool_state.set_count_failed(),
+                Err(_) => tool_state.set_session_count_failed(),
             }
         }
     }
@@ -237,8 +241,7 @@ impl ToolState {
             selected: BTreeSet::default(),
             cursor: 0,
             cursor_row: 0,
-            session_count: None,
-            count_failed: false,
+            session_count: SessionCountState::Unknown,
             load_state: LoadState::Unloaded,
         }
     }
@@ -315,12 +318,15 @@ impl ToolState {
     }
 
     pub(super) fn session_badge(&self) -> String {
-        if matches!(self.load_state, LoadState::Failed(_)) || self.count_failed {
+        if matches!(self.load_state, LoadState::Failed(_)) {
             return String::from("!");
         }
 
-        self.session_count
-            .map_or_else(|| String::from("-"), |count| count.to_string())
+        match self.session_count {
+            SessionCountState::Failed => String::from("!"),
+            SessionCountState::Known(count) => count.to_string(),
+            SessionCountState::Unknown => String::from("-"),
+        }
     }
 
     fn apply_row_cache(&mut self) {
@@ -340,8 +346,7 @@ impl ToolState {
     }
 
     fn set_sessions_ready(&mut self, sessions: Vec<SessionEntry>) {
-        self.session_count = Some(sessions.len());
-        self.count_failed = false;
+        self.session_count = SessionCountState::Known(sessions.len());
         self.sessions = sessions;
         self.apply_row_cache();
         self.retain_existing_selection();
@@ -349,13 +354,11 @@ impl ToolState {
     }
 
     fn set_session_count(&mut self, count: usize) {
-        self.session_count = Some(count);
-        self.count_failed = false;
+        self.session_count = SessionCountState::Known(count);
     }
 
-    fn set_count_failed(&mut self) {
-        self.session_count = None;
-        self.count_failed = true;
+    fn set_session_count_failed(&mut self) {
+        self.session_count = SessionCountState::Failed;
     }
 
     fn set_load_failed(&mut self, error: impl Into<String>) {
