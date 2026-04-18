@@ -82,63 +82,51 @@ impl ClaudeCodeSource {
     }
 
     fn collect_session_count(&self) -> Result<usize> {
-        if !self.root.exists() {
-            return Ok(0);
-        }
-
         let mut count = 0;
-        for path in immediate_children(&self.root)? {
-            if Self::is_session_entry(&path)? {
-                count += 1;
-                continue;
-            }
-
-            if path.is_dir() {
-                count += Self::count_project_sessions(&path)?;
-            }
-        }
-
+        self.visit_session_entries(|_| {
+            count += 1;
+            Ok(())
+        })?;
         Ok(count)
     }
 
     fn collect_sessions(&self) -> Result<Vec<SessionEntry>> {
+        let mut sessions = Vec::new();
+        self.visit_session_entries(|path| {
+            if let Some(session) = Self::read_session_entry(path)? {
+                sessions.push(session);
+            }
+            Ok(())
+        })?;
+        Ok(sessions)
+    }
+
+    fn visit_session_entries(&self, mut visit: impl FnMut(&Path) -> Result<()>) -> Result<()> {
         if !self.root.exists() {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
-        let mut sessions = Vec::new();
         for path in immediate_children(&self.root)? {
-            if let Some(session) = Self::entry_session(&path)? {
-                sessions.push(session);
+            if Self::is_session_entry(&path)? {
+                visit(&path)?;
                 continue;
             }
 
             if path.is_dir() {
-                Self::collect_project_sessions(&path, &mut sessions)?;
+                Self::visit_project_session_entries(&path, &mut visit)?;
             }
         }
 
-        Ok(sessions)
+        Ok(())
     }
 
-    fn count_project_sessions(project_root: &Path) -> Result<usize> {
-        let mut count = 0;
-        for path in immediate_children(project_root)? {
-            if Self::is_session_entry(&path)? {
-                count += 1;
-            }
-        }
-
-        Ok(count)
-    }
-
-    fn collect_project_sessions(
+    fn visit_project_session_entries(
         project_root: &Path,
-        sessions: &mut Vec<SessionEntry>,
+        visit: &mut impl FnMut(&Path) -> Result<()>,
     ) -> Result<()> {
         for path in immediate_children(project_root)? {
-            if let Some(session) = Self::entry_session(&path)? {
-                sessions.push(session);
+            if Self::is_session_entry(&path)? {
+                visit(&path)?;
             }
         }
 
@@ -157,12 +145,8 @@ impl ClaudeCodeSource {
         Ok(false)
     }
 
-    fn entry_session(path: &Path) -> Result<Option<SessionEntry>> {
+    fn read_session_entry(path: &Path) -> Result<Option<SessionEntry>> {
         if path.is_file() {
-            if !is_jsonl(path) {
-                return Ok(None);
-            }
-
             let metadata_paths = [path.to_path_buf()];
             return Self::read_session(&metadata_paths, path.to_path_buf()).map(Some);
         }
