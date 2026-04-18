@@ -4,11 +4,14 @@ mod droid;
 
 use std::env;
 use std::fs;
+use std::io::{BufRead, BufReader};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
+use serde::de::DeserializeOwned;
 
 use crate::model::session::{SessionEntry, Tool};
 
@@ -149,6 +152,52 @@ pub fn collect_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+pub(crate) fn first_jsonl_record<T, U>(
+    path: &Path,
+    mut map_record: impl FnMut(T) -> Option<U>,
+) -> Result<Option<U>>
+where
+    T: DeserializeOwned,
+{
+    let mut mapped = None;
+    for_each_jsonl_record(path, |record| {
+        mapped = map_record(record);
+        if mapped.is_some() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })?;
+
+    Ok(mapped)
+}
+
+pub(crate) fn for_each_jsonl_record<T>(
+    path: &Path,
+    mut visit: impl FnMut(T) -> ControlFlow<()>,
+) -> Result<()>
+where
+    T: DeserializeOwned,
+{
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let line = line?;
+        let record: T = match serde_json::from_str(&line) {
+            Ok(record) => record,
+            Err(_) => continue,
+        };
+
+        if matches!(visit(record), ControlFlow::Break(_)) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn configured_root(root_env: &str, default_segments: &[&str]) -> Result<PathBuf> {
     env::var_os(root_env)
         .map(PathBuf::from)
@@ -185,6 +234,10 @@ pub(crate) fn sort_sessions_by_project(sessions: &mut [SessionEntry]) {
     });
 }
 
+pub(crate) fn is_jsonl_file(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+}
+
 fn collect_jsonl_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if !root.exists() {
         return Ok(());
@@ -199,7 +252,7 @@ fn collect_jsonl_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> Result<()
             continue;
         }
 
-        if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
+        if is_jsonl_file(&path) {
             files.push(path);
         }
     }
@@ -220,9 +273,10 @@ fn default_root(path_segments: &[&str]) -> Result<PathBuf> {
 mod tests {
     use std::fs;
 
+    use serde::Deserialize;
     use tempfile::tempdir;
 
-    use super::delete_entries_within_root;
+    use super::{delete_entries_within_root, first_jsonl_record};
     use crate::model::session::{SessionEntry, Tool};
 
     #[test]
@@ -248,5 +302,43 @@ mod tests {
         assert_eq!(summary.deleted, 0);
         assert_eq!(summary.failed.len(), 1);
         assert!(outside.exists());
+    }
+
+    #[test]
+    fn reads_first_matching_jsonl_record() {
+        #[derive(Deserialize)]
+        struct TestRecord {
+            value: i32,
+        }
+
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("records.jsonl");
+        fs::write(&path, "{invalid json}\n{\"value\":1}\n{\"value\":2}\n").unwrap();
+
+        let record = first_jsonl_record::<TestRecord, i32>(&path, |record| {
+            (record.value > 1).then_some(record.value)
+        })
+        .unwrap();
+
+        assert_eq!(record, Some(2));
+    }
+
+    #[test]
+    fn returns_none_when_jsonl_has_no_matching_record() {
+        #[derive(Deserialize)]
+        struct TestRecord {
+            value: i32,
+        }
+
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("records.jsonl");
+        fs::write(&path, "{\"value\":1}\n{\"value\":2}\n").unwrap();
+
+        let record = first_jsonl_record::<TestRecord, i32>(&path, |record| {
+            (record.value > 2).then_some(record.value)
+        })
+        .unwrap();
+
+        assert_eq!(record, None);
     }
 }

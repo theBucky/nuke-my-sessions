@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::ErrorKind;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -10,7 +11,8 @@ use crate::model::session::{SessionEntry, Tool};
 
 use super::{
     DeleteSummary, SessionSource, configured_root, delete_entries_within_root_using, delete_entry,
-    project_from_cwd, session_file_id, session_updated_at, sort_sessions_by_project,
+    for_each_jsonl_record, is_jsonl_file, project_from_cwd, session_file_id, session_updated_at,
+    sort_sessions_by_project,
 };
 
 const ROOT_ENV: &str = "NUKE_MY_SESSIONS_CLAUDE_ROOT";
@@ -33,48 +35,18 @@ impl ClaudeCodeSource {
             bail!("no metadata files found for {}", session_path.display());
         }
 
-        let mut cwd = None;
-        let mut session_id = None;
+        let metadata = read_metadata(metadata_paths)?;
         let metadata_updated_at = metadata_paths.iter().fold(None, |latest, metadata_path| {
             latest_system_time(latest, session_updated_at(metadata_path))
         });
-
-        for metadata_path in metadata_paths {
-            let file = fs::File::open(metadata_path)
-                .with_context(|| format!("failed to open {}", metadata_path.display()))?;
-            let reader = BufReader::new(file);
-
-            for line in reader.lines() {
-                let line = line?;
-                let record: ClaudeRecord = match serde_json::from_str(&line) {
-                    Ok(record) => record,
-                    Err(_) => continue,
-                };
-
-                if session_id.is_none() {
-                    session_id = record.session_id;
-                }
-
-                if cwd.is_none() {
-                    cwd = record.cwd;
-                }
-
-                if cwd.is_some() && session_id.is_some() {
-                    break;
-                }
-            }
-
-            if cwd.is_some() && session_id.is_some() {
-                break;
-            }
-        }
-
-        let project = project_from_cwd(cwd.as_deref());
+        let project = project_from_cwd(metadata.cwd.as_deref());
         let updated_at = latest_system_time(session_updated_at(&session_path), metadata_updated_at);
 
         Ok(SessionEntry {
             tool: Tool::ClaudeCode,
-            id: session_id.unwrap_or_else(|| session_file_id(&session_path)),
+            id: metadata
+                .session_id
+                .unwrap_or_else(|| session_file_id(&session_path)),
             project,
             path: session_path,
             updated_at,
@@ -83,88 +55,58 @@ impl ClaudeCodeSource {
 
     fn collect_session_count(&self) -> Result<usize> {
         let mut count = 0;
-        self.visit_session_entries(|_| {
+        self.for_each_session_entry(|_| {
             count += 1;
             Ok(())
         })?;
+
         Ok(count)
     }
 
     fn collect_sessions(&self) -> Result<Vec<SessionEntry>> {
         let mut sessions = Vec::new();
-        self.visit_session_entries(|path| {
+        self.for_each_session_entry(|path| {
             if let Some(session) = Self::read_session_entry(path)? {
                 sessions.push(session);
             }
             Ok(())
         })?;
+
         Ok(sessions)
     }
 
-    fn visit_session_entries(&self, mut visit: impl FnMut(&Path) -> Result<()>) -> Result<()> {
-        if !self.root.exists() {
-            return Ok(());
-        }
-
-        for path in immediate_children(&self.root)? {
-            if Self::is_session_entry(&path)? {
-                visit(&path)?;
-                continue;
-            }
-
-            if path.is_dir() {
-                Self::visit_project_session_entries(&path, &mut visit)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn visit_project_session_entries(
-        project_root: &Path,
-        visit: &mut impl FnMut(&Path) -> Result<()>,
-    ) -> Result<()> {
-        for path in immediate_children(project_root)? {
-            if Self::is_session_entry(&path)? {
-                visit(&path)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn is_session_entry(path: &Path) -> Result<bool> {
-        if path.is_file() {
-            return Ok(is_jsonl(path));
-        }
-
-        if path.is_dir() {
-            return session_dir_has_metadata(path);
-        }
-
-        Ok(false)
-    }
-
     fn read_session_entry(path: &Path) -> Result<Option<SessionEntry>> {
-        if path.is_file() {
-            let metadata_paths = [path.to_path_buf()];
-            return Self::read_session(&metadata_paths, path.to_path_buf()).map(Some);
-        }
-
-        if path.is_dir() {
-            return Self::read_session_dir(path);
-        }
-
-        Ok(None)
-    }
-
-    fn read_session_dir(path: &Path) -> Result<Option<SessionEntry>> {
-        let metadata_paths = session_dir_metadata_paths(path)?;
+        let metadata_paths = session_metadata_paths(path)?;
         if metadata_paths.is_empty() {
             return Ok(None);
         }
 
         Self::read_session(&metadata_paths, path.to_path_buf()).map(Some)
+    }
+
+    fn for_each_session_entry(&self, mut visit: impl FnMut(&Path) -> Result<()>) -> Result<()> {
+        if !self.root.exists() {
+            return Ok(());
+        }
+
+        for root_child in immediate_children(&self.root)? {
+            if is_session_entry(&root_child)? {
+                visit(&root_child)?;
+                continue;
+            }
+
+            if !root_child.is_dir() {
+                continue;
+            }
+
+            for project_child in immediate_children(&root_child)? {
+                if is_session_entry(&project_child)? {
+                    visit(&project_child)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -202,8 +144,91 @@ struct ClaudeRecord {
     session_id: Option<String>,
 }
 
-fn is_jsonl(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+#[derive(Default)]
+struct ClaudeMetadata {
+    cwd: Option<PathBuf>,
+    session_id: Option<String>,
+}
+
+impl ClaudeMetadata {
+    fn merge(&mut self, record: ClaudeRecord) {
+        if self.cwd.is_none() {
+            self.cwd = record.cwd;
+        }
+
+        if self.session_id.is_none() {
+            self.session_id = record.session_id;
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.cwd.is_some() && self.session_id.is_some()
+    }
+}
+
+fn read_metadata(metadata_paths: &[PathBuf]) -> Result<ClaudeMetadata> {
+    let mut metadata = ClaudeMetadata::default();
+    for metadata_path in metadata_paths {
+        for_each_jsonl_record(metadata_path, |record: ClaudeRecord| {
+            metadata.merge(record);
+            if metadata.is_complete() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })?;
+
+        if metadata.is_complete() {
+            break;
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn is_session_entry(path: &Path) -> Result<bool> {
+    if path.is_file() {
+        return Ok(is_jsonl_file(path));
+    }
+
+    if path.is_dir() {
+        return session_dir_has_metadata(path);
+    }
+
+    Ok(false)
+}
+
+fn session_metadata_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return Ok(if is_jsonl_file(path) {
+            vec![path.to_path_buf()]
+        } else {
+            Vec::new()
+        });
+    }
+
+    if !path.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let subagents = path.join("subagents");
+    if !subagents.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut jsonl_paths = Vec::new();
+    for entry in fs::read_dir(&subagents)
+        .with_context(|| format!("failed to read {}", subagents.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.metadata()?.is_file() && is_jsonl_file(&path) {
+            jsonl_paths.push(path);
+        }
+    }
+
+    jsonl_paths.sort();
+    Ok(jsonl_paths)
 }
 
 fn session_dir_has_metadata(path: &Path) -> Result<bool> {
@@ -217,33 +242,12 @@ fn session_dir_has_metadata(path: &Path) -> Result<bool> {
     {
         let entry = entry?;
         let path = entry.path();
-        if entry.metadata()?.is_file() && is_jsonl(&path) {
+        if entry.metadata()?.is_file() && is_jsonl_file(&path) {
             return Ok(true);
         }
     }
 
     Ok(false)
-}
-
-fn session_dir_metadata_paths(path: &Path) -> Result<Vec<PathBuf>> {
-    let subagents = path.join("subagents");
-    if !subagents.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut jsonl_paths = Vec::new();
-    for entry in fs::read_dir(&subagents)
-        .with_context(|| format!("failed to read {}", subagents.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.metadata()?.is_file() && is_jsonl(&path) {
-            jsonl_paths.push(path);
-        }
-    }
-
-    jsonl_paths.sort();
-    Ok(jsonl_paths)
 }
 
 fn latest_system_time(left: Option<SystemTime>, right: Option<SystemTime>) -> Option<SystemTime> {

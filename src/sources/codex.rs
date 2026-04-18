@@ -1,15 +1,14 @@
-use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::model::session::{SessionEntry, Tool};
 
 use super::{
     DeleteSummary, SessionSource, collect_jsonl_files, configured_root, delete_entries_within_root,
-    project_from_cwd, session_file_id, session_updated_at, sort_sessions_by_project,
+    first_jsonl_record, project_from_cwd, session_file_id, session_updated_at,
+    sort_sessions_by_project,
 };
 
 const ROOT_ENV: &str = "NUKE_MY_SESSIONS_CODEX_ROOT";
@@ -28,34 +27,20 @@ impl CodexSource {
     }
 
     fn read_session(path: PathBuf) -> Result<SessionEntry> {
-        let file =
-            fs::File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-        let reader = BufReader::new(file);
-        let mut id = None;
-        let mut cwd = None;
-
-        for line in reader.lines() {
-            let line = line?;
-            let record: SessionMetaRecord = match serde_json::from_str(&line) {
-                Ok(record) => record,
-                Err(_) => continue,
-            };
-
-            if record.record_type != "session_meta" {
-                continue;
-            }
-
-            id = Some(record.payload.id);
-            cwd = record.payload.cwd;
-            break;
-        }
-
-        let project = project_from_cwd(cwd.as_deref());
+        let session_meta =
+            first_jsonl_record::<CodexRecord, SessionMetaPayload>(&path, |record| match record {
+                CodexRecord::SessionMeta { payload } => Some(payload),
+                CodexRecord::Other => None,
+            })?;
+        let id = session_meta
+            .as_ref()
+            .map_or_else(|| session_file_id(&path), |meta| meta.id.clone());
+        let project = project_from_cwd(session_meta.and_then(|meta| meta.cwd).as_deref());
         let updated_at = session_updated_at(&path);
 
         Ok(SessionEntry {
             tool: Tool::Codex,
-            id: id.unwrap_or_else(|| session_file_id(&path)),
+            id,
             project,
             path,
             updated_at,
@@ -84,10 +69,12 @@ impl SessionSource for CodexSource {
 }
 
 #[derive(Deserialize)]
-struct SessionMetaRecord {
-    #[serde(rename = "type")]
-    record_type: String,
-    payload: SessionMetaPayload,
+#[serde(tag = "type")]
+enum CodexRecord {
+    #[serde(rename = "session_meta")]
+    SessionMeta { payload: SessionMetaPayload },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Deserialize)]

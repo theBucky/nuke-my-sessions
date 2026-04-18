@@ -1,17 +1,15 @@
-use std::fs;
 use std::io::ErrorKind;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::model::session::{SessionEntry, Tool};
 
 use super::{
     DeleteSummary, SessionSource, collect_jsonl_files, configured_root,
-    delete_entries_within_root_using, delete_entry, project_from_cwd, session_file_id,
-    session_updated_at, sort_sessions_by_project,
+    delete_entries_within_root_using, delete_entry, first_jsonl_record, project_from_cwd,
+    session_file_id, session_updated_at, sort_sessions_by_project,
 };
 
 const ROOT_ENV: &str = "NUKE_MY_SESSIONS_DROID_ROOT";
@@ -30,34 +28,24 @@ impl DroidSource {
     }
 
     fn read_session(path: PathBuf) -> Result<SessionEntry> {
-        let file =
-            fs::File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-        let reader = BufReader::new(file);
-        let mut id = None;
-        let mut cwd = None;
-
-        for line in reader.lines() {
-            let line = line?;
-            let record: DroidSessionRecord = match serde_json::from_str(&line) {
-                Ok(record) => record,
-                Err(_) => continue,
-            };
-
-            if record.record_type != "session_start" {
-                continue;
-            }
-
-            id = record.id;
-            cwd = record.cwd;
-            break;
-        }
-
+        let session_start = first_jsonl_record::<DroidRecord, (Option<String>, Option<PathBuf>)>(
+            &path,
+            |record| match record {
+                DroidRecord::SessionStart { id, cwd } => Some((id, cwd)),
+                DroidRecord::Other => None,
+            },
+        )?;
         let updated_at = session_updated_at(&path);
+        let id = session_start
+            .as_ref()
+            .and_then(|(id, _)| id.clone())
+            .unwrap_or_else(|| session_file_id(&path));
+        let project = project_from_cwd(session_start.and_then(|(_, cwd)| cwd).as_deref());
 
         Ok(SessionEntry {
             tool: Tool::Droid,
-            id: id.unwrap_or_else(|| session_file_id(&path)),
-            project: project_from_cwd(cwd.as_deref()),
+            id,
+            project,
             path,
             updated_at,
         })
@@ -87,13 +75,17 @@ impl SessionSource for DroidSource {
 }
 
 #[derive(Deserialize)]
-struct DroidSessionRecord {
-    #[serde(rename = "type")]
-    record_type: String,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    cwd: Option<PathBuf>,
+#[serde(tag = "type")]
+enum DroidRecord {
+    #[serde(rename = "session_start")]
+    SessionStart {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
+    #[serde(other)]
+    Other,
 }
 
 fn delete_session_pair(root: &Path, jsonl_path: &Path) -> Result<()> {
