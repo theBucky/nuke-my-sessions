@@ -62,6 +62,7 @@ impl<'a> SessionBrowser<'a> {
             KeyCode::Char('j') => self.move_project_cursor(1),
             KeyCode::Char('k') => self.move_project_cursor(-1),
             KeyCode::Char('a') => self.toggle_all_current_tool(),
+            KeyCode::Char('s') => self.toggle_current_project_sessions(),
             KeyCode::Char(' ') => self.toggle_current_session(),
             KeyCode::Enter => return self.handle_enter(),
             _ => {}
@@ -105,6 +106,16 @@ impl<'a> SessionBrowser<'a> {
 
         self.clear_pending_delete();
         self.current_tool_mut().toggle_all_selected();
+        self.clear_status();
+    }
+
+    fn toggle_current_project_sessions(&mut self) {
+        if self.focus != Focus::Sessions || self.current_tool().sessions.is_empty() {
+            return;
+        }
+
+        self.clear_pending_delete();
+        self.current_tool_mut().toggle_project_selected();
         self.clear_status();
     }
 
@@ -313,21 +324,35 @@ impl ToolState {
         }
     }
 
-    fn toggle_all_selected(&mut self) {
-        if self
-            .sessions
+    fn toggle_project_selected(&mut self) {
+        let project = self.sessions[self.cursor].project_name();
+        let start = self.sessions[..=self.cursor]
             .iter()
-            .all(|session| self.selected.contains(&session.path))
+            .rposition(|session| session.project_name() != project)
+            .map_or(0, |index| index + 1);
+        let end = self.sessions[self.cursor..]
+            .iter()
+            .position(|session| session.project_name() != project)
+            .map_or(self.sessions.len(), |index| self.cursor + index);
+        Self::toggle_selected_paths(&mut self.selected, &self.sessions[start..end]);
+    }
+
+    fn toggle_all_selected(&mut self) {
+        Self::toggle_selected_paths(&mut self.selected, &self.sessions);
+    }
+
+    fn toggle_selected_paths(selected: &mut BTreeSet<PathBuf>, sessions: &[SessionEntry]) {
+        if sessions
+            .iter()
+            .all(|session| selected.contains(&session.path))
         {
-            self.selected.clear();
+            for session in sessions {
+                selected.remove(&session.path);
+            }
             return;
         }
 
-        self.selected = self
-            .sessions
-            .iter()
-            .map(|session| session.path.clone())
-            .collect();
+        selected.extend(sessions.iter().map(|session| session.path.clone()));
     }
 
     pub(super) fn session_badge(&self) -> String {

@@ -98,6 +98,8 @@ impl SessionBrowser<'_> {
             plain(": toggle  "),
             hotkey("j/k"),
             plain(": project  "),
+            hotkey("s"),
+            plain(": project all/none  "),
             hotkey("a"),
             plain(": all/none  "),
             hotkey("enter"),
