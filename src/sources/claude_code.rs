@@ -30,10 +30,6 @@ impl ClaudeCodeSource {
     }
 
     fn read_session(metadata_paths: &[PathBuf], session_path: PathBuf) -> Result<SessionEntry> {
-        if metadata_paths.is_empty() {
-            bail!("no metadata files found for {}", session_path.display());
-        }
-
         let metadata = read_metadata(metadata_paths)?;
         let metadata_updated_at = metadata_paths.iter().fold(None, |latest, metadata_path| {
             latest.max(session_updated_at(metadata_path))
@@ -217,7 +213,7 @@ fn session_dir_has_metadata(path: &Path) -> Result<bool> {
     }
 
     for path in read_directory_paths(&subagents)? {
-        if path_metadata(&path)?.is_file() && is_jsonl_file(&path) {
+        if is_metadata_jsonl_file(&path)? {
             return Ok(true);
         }
     }
@@ -248,12 +244,17 @@ fn subagent_jsonl_paths(path: &Path) -> Result<Vec<PathBuf>> {
 
     read_directory_paths(&subagents)?
         .into_iter()
-        .map(|path| {
-            let is_jsonl = path_metadata(&path)?.is_file() && is_jsonl_file(&path);
-            Ok(is_jsonl.then_some(path))
+        .try_fold(Vec::new(), |mut jsonl_paths, path| {
+            if is_metadata_jsonl_file(&path)? {
+                jsonl_paths.push(path);
+            }
+
+            Ok(jsonl_paths)
         })
-        .collect::<Result<Vec<_>>>()
-        .map(|paths| paths.into_iter().flatten().collect())
+}
+
+fn is_metadata_jsonl_file(path: &Path) -> Result<bool> {
+    path_metadata(path).map(|metadata| metadata.is_file() && is_jsonl_file(path))
 }
 
 fn prune_empty_ancestors(root: &Path, start: &Path) -> Result<()> {

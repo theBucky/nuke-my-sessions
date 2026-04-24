@@ -108,19 +108,23 @@ pub(crate) fn delete_entries_within_root_using(
 
     let root = fs::canonicalize(root)
         .with_context(|| format!("failed to resolve root {}", root.display()))?;
-    let outcomes = sessions
+    let summary = sessions
         .iter()
-        .map(|session| {
-            delete_session(&root, session).map_err(|error| DeleteFailure {
-                path: session.path.clone(),
-                error: format!("{error:#}"),
-            })
-        })
-        .collect::<Vec<_>>();
-    let deleted = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
-    let failed = outcomes.into_iter().filter_map(Result::err).collect();
+        .fold(DeleteSummary::success(0), |mut summary, session| {
+            match delete_session(&root, session) {
+                Ok(()) => {
+                    summary.deleted += 1;
+                }
+                Err(error) => summary.failed.push(DeleteFailure {
+                    path: session.path.clone(),
+                    error: format!("{error:#}"),
+                }),
+            }
 
-    Ok(DeleteSummary { deleted, failed })
+            summary
+        });
+
+    Ok(summary)
 }
 
 pub(crate) fn delete_entry(root: &Path, path: &Path) -> Result<()> {

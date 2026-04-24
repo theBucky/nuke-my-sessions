@@ -1,4 +1,5 @@
 use std::fmt::{self, Display, Formatter};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -70,11 +71,31 @@ pub(crate) fn project_groups(
         })
 }
 
+pub(crate) fn project_group_range_at(sessions: &[SessionEntry], current: usize) -> Range<usize> {
+    project_start_at(sessions, current)..project_end_at(sessions, current)
+}
+
+fn project_start_at(sessions: &[SessionEntry], current: usize) -> usize {
+    let project = sessions[current].project_name();
+    sessions[..=current]
+        .iter()
+        .rposition(|session| session.project_name() != project)
+        .map_or(0, |index| index + 1)
+}
+
+fn project_end_at(sessions: &[SessionEntry], current: usize) -> usize {
+    let project = sessions[current].project_name();
+    sessions[current..]
+        .iter()
+        .position(|session| session.project_name() != project)
+        .map_or(sessions.len(), |index| current + index)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{SessionEntry, Tool, project_groups};
+    use super::{SessionEntry, Tool, project_group_range_at, project_groups};
 
     #[test]
     fn groups_adjacent_sessions_by_project() {
@@ -109,6 +130,21 @@ mod tests {
                 (String::from("no project"), vec![String::from("c-1")]),
             ]
         );
+    }
+
+    #[test]
+    fn finds_project_group_ranges() {
+        let sessions = vec![
+            session("a-1", Some("a")),
+            session("a-2", Some("a")),
+            session("b-1", Some("b")),
+            session("c-1", None),
+            session("c-2", None),
+        ];
+
+        assert_eq!(project_group_range_at(&sessions, 1), 0..2);
+        assert_eq!(project_group_range_at(&sessions, 2), 2..3);
+        assert_eq!(project_group_range_at(&sessions, 3), 3..5);
     }
 
     fn session(id: &str, project: Option<&str>) -> SessionEntry {

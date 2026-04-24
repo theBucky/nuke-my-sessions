@@ -9,7 +9,7 @@ use super::{
     SessionBrowser, SessionCountState, ToolState,
 };
 use crate::DeleteOutcome;
-use crate::model::session::{SessionEntry, Tool, project_groups};
+use crate::model::session::{SessionEntry, Tool, project_group_range_at, project_groups};
 use crate::sources::SourceRegistry;
 
 impl<'a> SessionBrowser<'a> {
@@ -303,9 +303,19 @@ impl ToolState {
     }
 
     fn move_project(&mut self, direction: isize) {
+        if self.sessions.is_empty() {
+            return;
+        }
+
         let next = match direction.cmp(&0) {
-            std::cmp::Ordering::Greater => self.project_start_after(self.cursor),
-            std::cmp::Ordering::Less => self.project_start_before(self.cursor),
+            std::cmp::Ordering::Greater => {
+                let next = project_group_range_at(&self.sessions, self.cursor).end;
+                (next < self.sessions.len()).then_some(next)
+            }
+            std::cmp::Ordering::Less => project_group_range_at(&self.sessions, self.cursor)
+                .start
+                .checked_sub(1)
+                .map(|previous| project_group_range_at(&self.sessions, previous).start),
             std::cmp::Ordering::Equal => None,
         };
 
@@ -325,16 +335,8 @@ impl ToolState {
     }
 
     fn toggle_project_selected(&mut self) {
-        let project = self.sessions[self.cursor].project_name();
-        let start = self.sessions[..=self.cursor]
-            .iter()
-            .rposition(|session| session.project_name() != project)
-            .map_or(0, |index| index + 1);
-        let end = self.sessions[self.cursor..]
-            .iter()
-            .position(|session| session.project_name() != project)
-            .map_or(self.sessions.len(), |index| self.cursor + index);
-        Self::toggle_selected_paths(&mut self.selected, &self.sessions[start..end]);
+        let project = project_group_range_at(&self.sessions, self.cursor);
+        Self::toggle_selected_paths(&mut self.selected, &self.sessions[project]);
     }
 
     fn toggle_all_selected(&mut self) {
@@ -356,14 +358,10 @@ impl ToolState {
     }
 
     pub(super) fn session_badge(&self) -> String {
-        if matches!(self.load_state, LoadState::Failed(_)) {
-            return String::from("!");
-        }
-
-        match self.session_count {
-            SessionCountState::Failed => String::from("!"),
-            SessionCountState::Known(count) => count.to_string(),
-            SessionCountState::Unknown => String::from("-"),
+        match (&self.load_state, self.session_count) {
+            (LoadState::Failed(_), _) | (_, SessionCountState::Failed) => String::from("!"),
+            (_, SessionCountState::Known(count)) => count.to_string(),
+            (_, SessionCountState::Unknown) => String::from("-"),
         }
     }
 
@@ -396,35 +394,6 @@ impl ToolState {
     fn set_cursor(&mut self, cursor: usize) {
         self.cursor = cursor.min(self.sessions.len().saturating_sub(1));
         self.cursor_row = self.session_rows.get(self.cursor).copied().unwrap_or(0);
-    }
-
-    fn project_start_after(&self, current: usize) -> Option<usize> {
-        let current_project = self.sessions.get(current)?.project_name();
-        self.sessions
-            .iter()
-            .enumerate()
-            .skip(current + 1)
-            .find(|(_, session)| session.project_name() != current_project)
-            .map(|(index, _)| index)
-    }
-
-    fn project_start_before(&self, current: usize) -> Option<usize> {
-        let current_project = self.sessions.get(current)?.project_name();
-        let current_start = self.sessions[..=current]
-            .iter()
-            .rposition(|session| session.project_name() != current_project)
-            .map_or(0, |index| index + 1);
-        if current_start == 0 {
-            return None;
-        }
-
-        let previous_project = self.sessions[current_start - 1].project_name();
-        Some(
-            self.sessions[..current_start]
-                .iter()
-                .rposition(|session| session.project_name() != previous_project)
-                .map_or(0, |index| index + 1),
-        )
     }
 
     fn reset(&mut self) {
