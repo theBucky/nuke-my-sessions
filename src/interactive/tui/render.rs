@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
 };
 
 use super::{
@@ -153,13 +153,13 @@ impl SessionListView {
 }
 
 fn panel_block(title: &str, focused: bool) -> Block<'_> {
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-
-    titled_block(title).border_style(border_style)
+    let block = titled_block(title);
+    if !focused {
+        return block;
+    }
+    block
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(Color::Cyan))
 }
 
 fn titled_block(title: &str) -> Block<'_> {
